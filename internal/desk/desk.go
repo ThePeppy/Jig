@@ -134,6 +134,13 @@ func (d *Desk) StartServers() {
 	d.Listening = hubErr == nil && mcpErr == nil
 }
 
+// touch asks the window and the menu bar to redraw. Nil is a no-op.
+func (d *Desk) touch() {
+	if d.NotifyUI != nil {
+		d.NotifyUI()
+	}
+}
+
 // AddPath keeps path and saves. A duplicate selects the existing entry.
 func (d *Desk) AddPath(path string) error {
 	_, _, err := d.Catalog.Add(path)
@@ -144,7 +151,11 @@ func (d *Desk) AddPath(path string) error {
 	d.SelectedSession = ""
 	d.Tab = TabLibrary
 	d.Notice = ""
-	return d.Save()
+	if err := d.Save(); err != nil {
+		return err
+	}
+	d.touch()
+	return nil
 }
 
 // Take applies paths from a file dialog or a drop. A cancel is ignored.
@@ -165,6 +176,7 @@ func (d *Desk) RemoveSelected() {
 	if e, ok := d.Catalog.Selected(); ok {
 		d.Catalog.Remove(e.ID)
 		_ = d.Save()
+		d.touch()
 	}
 }
 
@@ -181,6 +193,7 @@ func (d *Desk) StartSession(e catalog.Entry) error {
 	d.markLaunching(e.ID)
 	d.Catalog.Select(e.ID)
 	d.Notice = ""
+	d.touch()
 	idaDir := d.IdaDir
 	if idaDir == "" {
 		idaDir = d.Runtime().Install

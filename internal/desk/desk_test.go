@@ -44,6 +44,8 @@ func TestAddPathSelectsLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	n := 0
+	d.NotifyUI = func() { n++ }
 	d.Tab = TabSettings
 	path := filepath.Join(root, "rom.img")
 	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
@@ -64,6 +66,9 @@ func TestAddPathSelectsLibrary(t *testing.T) {
 	}
 	if len(d.Catalog.Entries()) != 2 {
 		t.Fatalf("entries %d", len(d.Catalog.Entries()))
+	}
+	if n != 2 {
+		t.Fatalf("notify %d", n)
 	}
 }
 

@@ -16,7 +16,7 @@
 
 | 路径 | 职责 |
 | --- | --- |
-| `main.go` | 窗口、`Take`、选 IDA 目录。对话框在 goroutine，结果经 `Window.Update` 回主线程。 |
+| `main.go` | 窗口、`Take`、选 IDA 目录。关窗不退出。对话框在 goroutine，结果经 `Window.Update` 回主线程。 |
 | `internal/product` | 名称 `Jig`，数据目录 `~/.jig`，路径缩写成 `~`。棱柱标在 `DrawMark`。 |
 | `internal/intake` | 路径能不能入库。无 UI，无磁盘。 |
 | `internal/catalog` | 内存库。`Path` 是 idalib 要打开的路径，`Source` 是用户选的文件，`Name` 永远是用户看到的文件名。 |
@@ -29,7 +29,10 @@
 | `internal/ui/chrome` | 标题栏、分栏、卡片、状态标记。页面复用，不另画一套。 |
 | `internal/ui/{library,trace,settings}` | 三个标签页。打开的 worker 画在数据库页，不另开会话页。 |
 | `internal/ui/appview` | 三页组合。 |
+| `internal/menubar` | 菜单栏状态项。打开、关闭分析会话，退出。不创建窗口。 |
 | `native/idalib-worker` | C++17 worker。工具实现在 `tools.cpp`。 |
+
+关闭主窗口不退出。菜单栏和 Dock 能把窗口再打开。退出才结束进程，并先让还开着的 worker 收拢数据库。
 
 ## 接纳
 
