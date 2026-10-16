@@ -59,6 +59,36 @@ func (s *Store) Append(e Entry) {
 	}
 }
 
+// ReplaceSummary rewrites matching summaries in place. Close uses it so a
+// launch row does not keep saying the worker is ready after it has stopped.
+func (s *Store) ReplaceSummary(from, to string) {
+	if from == "" || from == to {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.entries {
+		if s.entries[i].Summary == from {
+			s.entries[i].Summary = to
+		}
+	}
+}
+
+// Update rewrites every entry match accepts. Close uses it when a worker
+// that was still packing has actually exited.
+func (s *Store) Update(match func(Entry) bool, update func(*Entry)) {
+	if match == nil || update == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.entries {
+		if match(s.entries[i]) {
+			update(&s.entries[i])
+		}
+	}
+}
+
 // Entries returns a copy of current recorded operations.
 func (s *Store) Entries() []Entry {
 	s.mu.Lock()

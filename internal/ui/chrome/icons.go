@@ -16,13 +16,6 @@ var (
 		<path d="M3 13.5L10 17L17 13.5" stroke="#FFFFFF" stroke-width="1.65" stroke-linecap="round" stroke-linejoin="round"/>
 	</svg>`))
 
-	// IconSessions represents headless idalib worker nodes.
-	IconSessions = ui.MustParseSVG([]byte(`<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
-		<rect x="4.5" y="4.5" width="11" height="11" rx="2.5" stroke="#FFFFFF" stroke-width="1.65"/>
-		<rect x="7.5" y="7.5" width="5" height="5" rx="1" stroke="#FFFFFF" stroke-width="1.4"/>
-		<path d="M7.5 2V4.5M12.5 2V4.5M7.5 15.5V18M12.5 15.5V18M2 7.5H4.5M2 12.5H4.5M15.5 7.5H18M15.5 12.5H18" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
-	</svg>`))
-
 	// IconTrace represents live MCP call telemetry & audit stream.
 	IconTrace = ui.MustParseSVG([]byte(`<svg viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg">
 		<path d="M2.5 10H5.5L7.8 4.5L12.2 15.5L14.5 10H17.5" stroke="#FFFFFF" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>

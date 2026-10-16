@@ -4,6 +4,10 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
+
+	"jig/internal/session"
+	"jig/internal/trace"
 )
 
 func TestTakePersistsAndRejectsADirectory(t *testing.T) {
@@ -60,5 +64,43 @@ func TestAddPathSelectsLibrary(t *testing.T) {
 	}
 	if len(d.Catalog.Entries()) != 2 {
 		t.Fatalf("entries %d", len(d.Catalog.Entries()))
+	}
+}
+
+func TestCloseTraceLeavesPackingUntilTheWorkerExits(t *testing.T) {
+	d, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &session.Session{
+		ID:         "s-stop",
+		TargetName: "firmware.bin",
+		SourcePath: "/tmp/firmware.bin",
+		State:      session.StateStopping,
+		PID:        97100,
+	}
+	d.Sessions.Register(s)
+	d.Traces.Append(trace.Entry{
+		Function:  "session.close",
+		Target:    "firmware.bin",
+		Duration:  638 * time.Microsecond,
+		Status:    "ok",
+		Summary:   "正在收拢数据库",
+		Timestamp: time.Now().Add(-2 * time.Second),
+	})
+
+	d.settleCloseTraces()
+	if got := d.Traces.Entries()[0].Summary; got != "正在收拢数据库" {
+		t.Fatalf("settled while packing: %s", got)
+	}
+
+	s.State = session.StateClosed
+	d.settleCloseTraces()
+	got := d.Traces.Entries()[0]
+	if got.Summary != "数据库已收拢" {
+		t.Fatalf("summary %s", got.Summary)
+	}
+	if got.Duration < time.Second {
+		t.Fatalf("duration still the request blip: %s", got.Duration)
 	}
 }

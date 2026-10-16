@@ -17,12 +17,11 @@ import (
 	"jig/internal/trace"
 )
 
-// Tab is the window's current page.
+// Tab is the window's current page. An open worker is shown on TabLibrary.
 type Tab int
 
 const (
 	TabLibrary Tab = iota
-	TabSessions
 	TabTrace
 	TabSettings
 )
@@ -39,8 +38,9 @@ const (
 
 // Desk is main-thread state. Dialog results come back through Take.
 type Desk struct {
-	Tab             Tab
-	Section         SettingsSection
+	Tab     Tab
+	Section SettingsSection
+	// SelectedSession focuses a worker that is not the selected catalog entry.
 	SelectedSession string
 	Listening       bool
 	Notice          string
@@ -52,11 +52,14 @@ type Desk struct {
 	RequestAdd      func()
 	RequestIdaDir   func()
 	NotifyUI        func()
+	// Post runs fn on the window thread. Nil runs fn on the caller.
+	Post func(func())
 
-	dir     string
-	runtime idalib.Status
-	probed  bool
-	mcpSrv  *mcp.Server
+	dir       string
+	runtime   idalib.Status
+	probed    bool
+	mcpSrv    *mcp.Server
+	launching map[string]time.Time
 }
 
 type stored struct {
@@ -104,6 +107,7 @@ func Open(dir string) (*Desk, error) {
 // StartServers starts the local Worker TCP Hub (127.0.0.1:9399) and MCP HTTP Server (127.0.0.1:9401).
 func (d *Desk) StartServers() {
 	d.Sessions.OnChange = func() {
+		d.settleCloseTraces()
 		if d.NotifyUI != nil {
 			d.NotifyUI()
 		}
@@ -137,6 +141,7 @@ func (d *Desk) AddPath(path string) error {
 		d.Notice = intake.Message(err)
 		return err
 	}
+	d.SelectedSession = ""
 	d.Tab = TabLibrary
 	d.Notice = ""
 	return d.Save()
@@ -163,16 +168,65 @@ func (d *Desk) RemoveSelected() {
 	}
 }
 
-// StartSession launches an idalib worker for entry, registers it, and logs a trace.
+// StartSession launches an idalib worker for entry and logs a trace.
+// The library keeps showing that file. The wait runs off the caller when
+// Post is set, so the window can show the launch instead of freezing.
 func (d *Desk) StartSession(e catalog.Entry) error {
-	rt := d.Runtime()
+	if d.Launching(e.ID) {
+		return nil
+	}
+	if _, ok := d.Sessions.FindByPath(e.Path); ok {
+		return nil
+	}
+	d.markLaunching(e.ID)
+	d.Catalog.Select(e.ID)
+	d.Notice = ""
 	idaDir := d.IdaDir
 	if idaDir == "" {
-		idaDir = rt.Install
+		idaDir = d.Runtime().Install
 	}
-	start := time.Now()
-	s, err := d.Sessions.Launch(context.Background(), e.Name, e.Source, e.Path, idaDir)
-	dur := time.Since(start)
+	d.launchWorker(e, idaDir)
+	return nil
+}
+
+// Launching reports that entry's worker is still starting.
+func (d *Desk) Launching(id string) bool {
+	_, ok := d.LaunchStarted(id)
+	return ok
+}
+
+// LaunchStarted is when the launch was asked for.
+func (d *Desk) LaunchStarted(id string) (time.Time, bool) {
+	if d.launching == nil {
+		return time.Time{}, false
+	}
+	t, ok := d.launching[id]
+	return t, ok
+}
+
+func (d *Desk) markLaunching(id string) {
+	if d.launching == nil {
+		d.launching = map[string]time.Time{}
+	}
+	d.launching[id] = time.Now()
+}
+
+func (d *Desk) launchWorker(e catalog.Entry, idaDir string) {
+	run := func() {
+		start := time.Now()
+		s, err := d.Sessions.Launch(context.Background(), e.Name, e.Source, e.Path, idaDir)
+		dur := time.Since(start)
+		d.post(func() { d.finishLaunch(e, s, err, dur) })
+	}
+	if d.Post == nil {
+		run()
+		return
+	}
+	go run()
+}
+
+func (d *Desk) finishLaunch(e catalog.Entry, s *session.Session, err error, dur time.Duration) {
+	delete(d.launching, e.ID)
 	if err != nil {
 		d.Traces.Append(trace.Entry{
 			Function: "session.launch",
@@ -182,7 +236,7 @@ func (d *Desk) StartSession(e catalog.Entry) error {
 			Summary:  "启动失败: " + err.Error(),
 		})
 		d.Notice = "启动失败: " + err.Error()
-		return err
+		return
 	}
 	d.Traces.Append(trace.Entry{
 		Function: "session.launch",
@@ -192,30 +246,151 @@ func (d *Desk) StartSession(e catalog.Entry) error {
 		Summary:  fmt.Sprintf("Worker 已就绪 (PID: %d)", s.PID),
 	})
 	d.Notice = ""
+	d.Catalog.Select(e.ID)
 	d.SelectedSession = s.ID
-	d.Tab = TabSessions
-	return nil
 }
 
-// CloseSession terminates an active worker session.
+func (d *Desk) post(fn func()) {
+	if d.Post != nil {
+		d.Post(fn)
+		return
+	}
+	fn()
+}
+
+// CloseSession terminates the worker and every other live worker on the same
+// file. The call log is retargeted to the file name, and launch rows that
+// still say the worker is ready are rewritten so the bottom strip cannot
+// keep showing 就绪 after the session is gone.
 func (d *Desk) CloseSession(id string) error {
+	ids, name, pids := d.closeTargets(id)
 	start := time.Now()
-	err := d.Sessions.Close(id)
+	var err error
+	for _, sid := range ids {
+		if cerr := d.Sessions.Close(sid); cerr != nil && err == nil {
+			err = cerr
+		}
+	}
 	dur := time.Since(start)
 	status := "ok"
 	summary := "正在收拢数据库"
 	if err != nil {
 		status = "error"
 		summary = "关闭异常: " + err.Error()
+	} else if d.sessionsClosed(ids) {
+		summary = "数据库已收拢"
+	}
+	if name == "" {
+		name = id
 	}
 	d.Traces.Append(trace.Entry{
 		Function: "session.close",
-		Target:   id,
+		Target:   name,
 		Duration: dur,
 		Status:   status,
 		Summary:  summary,
 	})
+	for _, pid := range pids {
+		if pid == 0 {
+			continue
+		}
+		d.Traces.ReplaceSummary(
+			fmt.Sprintf("Worker 已就绪 (PID: %d)", pid),
+			fmt.Sprintf("Worker 已关闭 (PID: %d)", pid),
+		)
+	}
+	d.settleCloseTraces()
+	if d.NotifyUI != nil {
+		d.NotifyUI()
+	}
 	return err
+}
+
+func (d *Desk) closeTargets(id string) (ids []string, name string, pids []int) {
+	var seed *session.Session
+	for _, s := range d.Sessions.Sessions() {
+		if s.ID == id {
+			seed = s
+			break
+		}
+	}
+	if seed == nil {
+		return []string{id}, "", nil
+	}
+	name = seed.TargetName
+	if name == "" {
+		name = filepath.Base(firstNonEmpty(seed.SourcePath, seed.DatabasePath))
+	}
+	for _, s := range d.Sessions.Sessions() {
+		if s.ID == id || sameSessionFile(seed, s) {
+			ids = append(ids, s.ID)
+			pids = append(pids, s.PID)
+		}
+	}
+	if len(ids) == 0 {
+		ids = []string{id}
+	}
+	return ids, name, pids
+}
+
+func (d *Desk) sessionsClosed(ids []string) bool {
+	live := map[string]session.State{}
+	for _, s := range d.Sessions.Sessions() {
+		live[s.ID] = s.State
+	}
+	for _, id := range ids {
+		if st, ok := live[id]; ok && st != session.StateClosed {
+			return false
+		}
+	}
+	return true
+}
+
+// settleCloseTraces finishes close rows once no live worker remains for that
+// file. CloseSession records the request immediately; the worker may still be
+// packing when that row is written.
+func (d *Desk) settleCloseTraces() {
+	live := map[string]bool{}
+	for _, s := range d.Sessions.Sessions() {
+		if s.TargetName != "" {
+			live[s.TargetName] = true
+		}
+		if base := filepath.Base(firstNonEmpty(s.SourcePath, s.DatabasePath)); base != "" && base != "." {
+			live[base] = true
+		}
+	}
+	now := time.Now()
+	d.Traces.Update(func(e trace.Entry) bool {
+		return e.Function == "session.close" && e.Status == "ok" && e.Summary == "正在收拢数据库" && !live[e.Target]
+	}, func(e *trace.Entry) {
+		e.Summary = "数据库已收拢"
+		if !e.Timestamp.IsZero() {
+			e.Duration = now.Sub(e.Timestamp)
+		}
+	})
+}
+
+func sameSessionFile(a, b *session.Session) bool {
+	for _, left := range []string{a.SourcePath, a.DatabasePath} {
+		if left == "" {
+			continue
+		}
+		for _, right := range []string{b.SourcePath, b.DatabasePath} {
+			if right != "" && filepath.Clean(left) == filepath.Clean(right) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 // SetIdaDir stores the directory the user picked.

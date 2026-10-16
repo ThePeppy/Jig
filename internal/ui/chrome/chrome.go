@@ -61,8 +61,7 @@ func Title(c *ui.Context, d *desk.Desk) {
 				Material(glass.Glass{}).
 				AlignItems(ui.Center).
 				Children(func() {
-					tab(c, d, desk.TabLibrary, "数据库", false)
-					tab(c, d, desk.TabSessions, "会话", sessCount > 0)
+					tab(c, d, desk.TabLibrary, "数据库", sessCount > 0)
 					tab(c, d, desk.TabTrace, "记录", false)
 					tab(c, d, desk.TabSettings, "设置", false)
 				})
@@ -174,8 +173,10 @@ func ReadoutCell(c *ui.Context, label, value, sub string, _ ui.Color) {
 }
 
 // PathSlotCard is a path spec: role, file name, full path.
-func PathSlotCard(c *ui.Context, roleLabel, fileName, fullPath, badge string, badgeTone string) {
-	Card(c).Grow(1).Basis(0).Padding(12, 16).Gap(6).Children(func() {
+// It sizes to its text. In a row, Grow(1).Basis(0) the result so cards share width.
+func PathSlotCard(c *ui.Context, roleLabel, fileName, fullPath, badge string, badgeTone string) ui.Element {
+	card := Card(c).Padding(12, 16).Gap(6)
+	card.Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, roleLabel).FontSize(12).FontWeight(500).TextColor(theme.TextMuted)
 			ui.Spacer(c)
@@ -186,6 +187,7 @@ func PathSlotCard(c *ui.Context, roleLabel, fileName, fullPath, badge string, ba
 		ui.Text(c, fileName).FontSize(14).FontWeight(500).TextColor(theme.Text).SingleLine()
 		ui.Text(c, fullPath).FontSize(12).Font(theme.FontMono).TextColor(theme.TextMuted).SingleLine()
 	})
+	return card
 }
 
 // PrimaryButton is an ink key. Press does not scale.
@@ -201,7 +203,9 @@ func PrimaryButton(c *ui.Context, label string, icon *ui.SVG) ui.Element {
 		Center().
 		Focusable().
 		Label(label)
-	if btn.Hovered() {
+	if btn.Pressed() {
+		btn.Background(theme.LivePressed)
+	} else if btn.Hovered() {
 		btn.Background(theme.PrimaryHover)
 	}
 	btn.Children(func() {
@@ -234,7 +238,9 @@ func GhostButton(c *ui.Context, label string, icon *ui.SVG, danger bool) ui.Elem
 		iconCol = theme.Trouble
 		btn.BorderColor(theme.Trouble)
 	}
-	if btn.Hovered() {
+	if btn.Pressed() {
+		btn.Background(theme.Active)
+	} else if btn.Hovered() {
 		btn.Background(theme.Hover)
 	}
 	btn.Children(func() {
@@ -244,6 +250,117 @@ func GhostButton(c *ui.Context, label string, icon *ui.SVG, danger bool) ui.Elem
 		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(txtCol)
 	})
 	return btn
+}
+
+// BusyButton is an ink key that is working. It does not take another click.
+func BusyButton(c *ui.Context, label string) ui.Element {
+	btn := ui.Row(c).
+		Height(28).
+		Padding(0, 12).
+		Radius(theme.ControlR).
+		Background(theme.PrimaryBg).
+		Gap(6).
+		Center().
+		Label(label)
+	btn.Children(func() {
+		spin(c, label, theme.PrimaryText)
+		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(theme.PrimaryText)
+	})
+	return btn
+}
+
+// BusyGhost is a hairline key that is working. Fault stays oxide, not a tint.
+func BusyGhost(c *ui.Context, label string, danger bool) ui.Element {
+	txt := theme.Text
+	border := theme.BorderStrong
+	if danger {
+		txt = theme.Trouble
+		border = theme.Trouble
+	}
+	btn := ui.Row(c).
+		Height(28).
+		Padding(0, 12).
+		Radius(theme.ControlR).
+		Background(theme.Pane).
+		Border(1, border).
+		Gap(6).
+		Center().
+		Label(label)
+	btn.Children(func() {
+		spin(c, label, txt)
+		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(txt)
+	})
+	return btn
+}
+
+// LiveStage is a breathing mark plus a label, for work that is still going.
+func LiveStage(c *ui.Context, label string) {
+	ui.Row(c).Height(20).Gap(6).AlignItems(ui.Center).Children(func() {
+		pulse(c)
+		ui.Text(c, label).FontSize(12).TextColor(theme.Text)
+	})
+}
+
+// Work is the process of a start or a close. Earlier steps are done.
+// The mark breathes and the bar moves so the wait is not a freeze.
+func Work(c *ui.Context, title, meta, detail string, steps []string, active int) {
+	Card(c).Padding(14, 16).Gap(10).Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			pulse(c)
+			ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(theme.Text)
+			ui.Spacer(c)
+			if meta != "" {
+				ui.Text(c, meta).FontSize(12).Font(theme.FontMono).TextColor(theme.TextMuted)
+			}
+		})
+		ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+			for i, step := range steps {
+				if i > 0 {
+					Join(c)
+				}
+				tone := "idle"
+				if i < active {
+					tone = "done"
+				} else if i == active {
+					tone = "live"
+				}
+				Stage(c, tone, step)
+			}
+		})
+		sweep(c)
+		ui.Text(c, detail).FontSize(12).TextColor(theme.TextMuted)
+	})
+}
+
+func spin(c *ui.Context, key string, col ui.Color) {
+	icon := ui.Icon(c, IconRefresh).Size(11, 11).TextColor(col)
+	icon.Rotate(icon.Loop(key, 800*time.Millisecond, ui.Linear) * 360)
+}
+
+func pulse(c *ui.Context) {
+	box := ui.Box(c).Size(6, 6).Background(theme.Live)
+	box.Opacity(0.35 + 0.65*box.Loop("pulse", 900*time.Millisecond, ui.Bounce(ui.EaseInOut)))
+}
+
+func sweep(c *ui.Context) {
+	ui.Box(c).Height(2).FillWidth().Background(theme.Well).Radius(1).Draw(func(p *ui.Painter, r ui.Rect) {
+		p.AnimationFrame()
+		period := 1200 * time.Millisecond
+		t := float32(p.Now().UnixNano()%int64(period)) / float32(period)
+		if t > 0.5 {
+			t = 1 - t
+		}
+		t *= 2
+		w := r.W * 0.28
+		if w < 18 {
+			w = 18
+		}
+		if w > r.W {
+			w = r.W
+		}
+		x := r.X + (r.W-w)*t
+		p.Fill(ui.Rect{X: x, Y: r.Y, W: w, H: r.H}, theme.Ink, 1)
+	})
 }
 
 // CartridgeTile is a square format plate. A 2px bar appears only for on or fault.

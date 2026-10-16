@@ -154,9 +154,9 @@ func ida(c *ui.Context, d *desk.Desk) {
 				badge = "已探测"
 				tone = "ok"
 			}
-			chrome.PathSlotCard(c, "目录", installTitle(d), installLine(d), badge, tone)
+			chrome.PathSlotCard(c, "目录", installTitle(d), installLine(d), badge, tone).Grow(1).Basis(0)
 			chrome.ConduitBridge(c, "Headless", ready)
-			chrome.PathSlotCard(c, "libidalib", libraryTitle(st), libraryLine(st), libraryBadge(st), libraryTone(st))
+			chrome.PathSlotCard(c, "libidalib", libraryTitle(st), libraryLine(st), libraryBadge(st), libraryTone(st)).Grow(1).Basis(0)
 		})
 
 		// Harmonious Architecture Explanation Card

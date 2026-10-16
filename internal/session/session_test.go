@@ -63,3 +63,20 @@ func TestLaunchDoesNotStartAWorker(t *testing.T) {
 		t.Fatal("launch registered a session")
 	}
 }
+
+func TestShortSessionID(t *testing.T) {
+	m := NewManager()
+	m.Register(&Session{ID: "aaaaaaaa"})
+	id, err := m.newID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(id) != 8 || id == "aaaaaaaa" {
+		t.Fatalf("id %q", id)
+	}
+	for _, c := range id {
+		if c < '0' || (c > '9' && c < 'a') || c > 'f' {
+			t.Fatalf("id %q", id)
+		}
+	}
+}

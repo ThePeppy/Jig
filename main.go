@@ -37,6 +37,7 @@ func main() {
 			Content:              ui.View(appview.New(d)),
 		})
 		d.NotifyUI = func() { w.Update(func() {}) }
+		d.Post = w.Update
 		d.StartServers()
 		d.RequestAdd = func() { pickFiles(w, d) }
 		d.RequestIdaDir = func() { pickIdaDir(w, d) }

@@ -4,7 +4,9 @@ package session
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -44,12 +46,13 @@ type Session struct {
 	Error        string         `json:"error,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
 
-	cmd    *exec.Cmd
-	cancel context.CancelFunc
-	conn   net.Conn
-	writeM sync.Mutex
-	mu     sync.Mutex
-	exited chan struct{}
+	cmd     *exec.Cmd
+	cancel  context.CancelFunc
+	conn    net.Conn
+	exited  chan struct{}
+	closing bool
+	writeM  sync.Mutex
+	mu      sync.Mutex
 }
 
 // Elapsed returns how long the session has been active.
@@ -188,10 +191,12 @@ func (m *Manager) handleConn(conn net.Conn) {
 					m.order = append(m.order, boundID)
 				}
 				s.mu.Lock()
-				s.conn = conn
-				s.State = StateReady
+				if s.State != StateStopping && s.State != StateClosed && !s.closing {
+					s.conn = conn
+					s.State = StateReady
+				}
 				s.Metadata = msg.Payload
-				if dbPath := stringField(msg.Payload, "databasePath"); dbPath != "" {
+				if dbPath := stringField(msg.Payload, "databasePath"); dbPath != "" && s.State != StateClosed && s.State != StateStopping {
 					s.DatabasePath = dbPath
 				}
 				s.mu.Unlock()
@@ -363,7 +368,10 @@ func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, 
 		return nil, fmt.Errorf("无法打开 %s：%w", label, err)
 	}
 	install := idalib.ResolveInstallDir(idaDir)
-	id := fmt.Sprintf("jig-%d", time.Now().UnixNano())
+	id, err := m.newID()
+	if err != nil {
+		return nil, fmt.Errorf("无法打开 %s：%w", label, err)
+	}
 	cmd := exec.Command(bin, "--center-host", host, "--center-port", port, "--path", openPath, "--instance-id", id, "--ida-dir", install)
 	cmd.Env = append(os.Environ(), "IDADIR="+install)
 	var stderr bytes.Buffer
@@ -386,6 +394,7 @@ func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, 
 	s.mu.Lock()
 	s.PID = cmd.Process.Pid
 	s.mu.Unlock()
+	m.notify()
 
 	exited := s.exited
 	go func() {
@@ -393,6 +402,10 @@ func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, 
 		s.mu.Lock()
 		switch s.State {
 		case StateLaunching, StateReady:
+			if s.closing {
+				s.State = StateClosed
+				break
+			}
 			s.State = StateError
 			if waitErr != nil {
 				s.Error = waitErr.Error()
@@ -437,6 +450,23 @@ func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, 
 		case <-ticker.C:
 		}
 	}
+}
+
+// newID is a short UUID: 8 lowercase hex characters. A taken id is drawn again.
+func (m *Manager) newID() (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var b [4]byte
+	for range 8 {
+		if _, err := rand.Read(b[:]); err != nil {
+			return "", err
+		}
+		id := hex.EncodeToString(b[:])
+		if _, taken := m.sessions[id]; !taken {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("无法分配会话 ID")
 }
 
 func (m *Manager) failLaunch(s *Session, msg string) {
@@ -494,6 +524,7 @@ func (m *Manager) Close(id string) error {
 	}
 
 	s.mu.Lock()
+	s.closing = true
 	s.State = StateStopping
 	conn := s.conn
 	s.conn = nil

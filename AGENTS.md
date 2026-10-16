@@ -27,8 +27,8 @@
 | `internal/trace` | 内存环形记录，默认 200 条，新的在前。 |
 | `internal/ui/theme` | 颜色和度量。改表面先改这里。 |
 | `internal/ui/chrome` | 标题栏、分栏、卡片、状态标记。页面复用，不另画一套。 |
-| `internal/ui/{library,sessions,trace,settings}` | 四个标签页。 |
-| `internal/ui/appview` | 四页组合。 |
+| `internal/ui/{library,trace,settings}` | 三个标签页。打开的 worker 画在数据库页，不另开会话页。 |
+| `internal/ui/appview` | 三页组合。 |
 | `native/idalib-worker` | C++17 worker。工具实现在 `tools.cpp`。 |
 
 ## 接纳
@@ -68,7 +68,7 @@ MCP 名到 worker 名：
 
 MyGo `v0.5.2`。内容区 1280×800，最小 1080×680。`TitleBarHidden`，高 `theme.TitleBarH`（42）。系统画交通灯，不画假的。窗口圆角由系统裁切；内容不留第二套外圆角，不留分栏间隙。列表宽 264，中间一条发丝线。标签和添加按钮是 Liquid Glass 胶囊。
 
-四个标签：数据库、会话、记录、设置。「数据库」是库，不是扩展名过滤。
+三个标签：数据库、记录、设置。打开的 worker 就在对应文件的详情里，不另开一页。「数据库」是库，不是扩展名过滤。
 
 颜色只来自 `theme`：冷灰底、白盘、墨色标记。唯一彩色是故障 `#9B2C2C`。不用橙色，不用米色。状态用方块标记，不用变色的字。
 
