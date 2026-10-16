@@ -1,0 +1,330 @@
+package settings
+
+import (
+	"fmt"
+	"path/filepath"
+
+	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
+
+	"app/internal/desk"
+	"app/internal/idalib"
+	"app/internal/product"
+	"app/internal/ui/chrome"
+	"app/internal/ui/theme"
+)
+
+// View draws the settings groups.
+func View(c *ui.Context, d *desk.Desk) {
+	ui.Row(c).Grow(1).Gap(0).AlignItems(ui.Stretch).Children(func() {
+		list(c, d)
+		body(c, d)
+	})
+}
+
+func list(c *ui.Context, d *desk.Desk) {
+	pane := chrome.Sidebar(c)
+	portMeta := "尚未监听"
+	if d.Listening {
+		portMeta = "监听中"
+	}
+	pane.Children(func() {
+		ui.Row(c).Height(36).Padding(0, 14).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "系统选项").FontSize(11).TextColor(theme.TextMuted)
+		})
+
+		ui.Scroll(c).Grow(1).Padding(6, 6).Gap(3).Children(func() {
+			item(c, d, desk.SettingsIDA, "IDA", "目录", "安装路径与运行时")
+			item(c, d, desk.SettingsPorts, "端口", portMeta, "MCP 与 Worker")
+			item(c, d, desk.SettingsAgents, "Agent", "客户端连接", "Claude、Codex、OpenCode")
+			item(c, d, desk.SettingsAppearance, "界面", "中文", "浅色固定")
+		})
+	})
+}
+
+func item(c *ui.Context, d *desk.Desk, id desk.SettingsSection, title, meta, sub string) {
+	on := d.Section == id
+	row := ui.Column(c).
+		Key(fmt.Sprintf("set-row-%d", id)).
+		MinHeight(50).
+		Padding(8, 12).
+		Radius(theme.CardR).
+		Cursor(ui.CursorPointer).
+		Transition(chrome.ColorTransition).
+		Justify(ui.Center).
+		Gap(3).
+		Focusable().
+		Label(title)
+
+	if row.Clicked() {
+		d.Section = id
+		on = true
+	}
+
+	chrome.StyleSidebarRow(row, on, theme.PrimaryBg)
+
+	titleColor := theme.TextMuted
+	if on {
+		titleColor = theme.Text
+	}
+
+	row.Children(func() {
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(titleColor).Grow(1)
+			ui.Text(c, meta).FontSize(11).TextColor(theme.TextMuted)
+		})
+		ui.Text(c, sub).FontSize(11).TextColor(theme.Muted).SingleLine()
+	})
+}
+
+func body(c *ui.Context, d *desk.Desk) {
+	pane := chrome.Pane(c).Grow(1)
+	pane.Children(func() {
+		ui.Column(c).
+			Key(fmt.Sprintf("set-body-%d", d.Section)).
+			Grow(1).
+			Transition(chrome.DetailTransition).
+			Children(func() {
+				switch d.Section {
+				case desk.SettingsPorts:
+					ports(c, d)
+				case desk.SettingsAgents:
+					agents(c, d)
+				case desk.SettingsAppearance:
+					appearance(c)
+				default:
+					ida(c, d)
+				}
+			})
+		chrome.Status(c, d, "设置", "idle")
+	})
+}
+
+func ida(c *ui.Context, d *desk.Desk) {
+	st := d.Runtime()
+	ready := d.IdaDir != "" || st.Found
+
+	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "IDA").FontSize(18).FontWeight(500).TextColor(theme.Text)
+			if ready {
+				chrome.Stage(c, "ok", "就绪")
+			} else {
+				chrome.Stage(c, "idle", "未设置")
+			}
+			ui.Spacer(c)
+
+			ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
+				pick := chrome.PrimaryButton(c, "选择目录...", nil).Label("选择目录")
+				if pick.Clicked() && d.RequestIdaDir != nil {
+					d.RequestIdaDir()
+				}
+
+				refresh := chrome.GhostButton(c, "重新探测", nil, false)
+				if refresh.Clicked() {
+					d.RefreshRuntime()
+				}
+			})
+		})
+
+		ui.Text(c, "Jig 依靠 idalib 无界面打开文件,不启动 IDA 界面。").FontSize(13).TextColor(theme.TextMuted)
+	})
+
+	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+		// 3-Segment Horizontal Readout Strip
+		chrome.Card(c).Children(func() {
+			ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+				idalibVal := "待配置"
+				idalibCol := theme.Idle
+				if st.Found {
+					idalibVal = "可用"
+					idalibCol = theme.Live
+				}
+				chrome.ReadoutCell(c, "idalib", idalibVal, "无界面逆向引擎", idalibCol)
+				chrome.ReadoutCell(c, "Python", pythonShortName(st), pythonSummary(st), theme.Run)
+				chrome.ReadoutCell(c, "数据目录", "~/.jig", "状态与样本索引存储", theme.TextMuted)
+			})
+		})
+
+		// Dual-Slot Path Cards
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			badge := "未设置"
+			tone := "idle"
+			if ready {
+				badge = "已探测"
+				tone = "ok"
+			}
+			chrome.PathSlotCard(c, "目录", installTitle(d), installLine(d), badge, tone)
+			chrome.ConduitBridge(c, "Headless", ready)
+			chrome.PathSlotCard(c, "Python 解释器", pythonShortName(st), pythonSummary(st), "运行时", "done")
+		})
+
+		// Harmonious Architecture Explanation Card
+		chrome.Plate(c).Padding(16, 18).Gap(8).Children(func() {
+			ui.Text(c, "无插件直连").FontSize(13).FontWeight(500).TextColor(theme.Text)
+			ui.Text(c, "直接通过本机 Python 启动内置 worker 并加载 idalib，不向 IDA 的 plugins 目录安装或注入任何 GUI 插件。").FontSize(12).TextColor(theme.TextMuted)
+		})
+	})
+}
+
+func ports(c *ui.Context, d *desk.Desk) {
+	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "端口").FontSize(18).FontWeight(500).TextColor(theme.Text)
+			if d.Listening {
+				chrome.Stage(c, "ok", "监听中")
+			} else {
+				chrome.Stage(c, "idle", "尚未监听")
+			}
+		})
+		if d.Listening {
+			ui.Text(c, "MCP HTTP 与 Worker TCP 已在本机回环地址监听。").FontSize(13).TextColor(theme.TextMuted)
+		} else {
+			ui.Text(c, "MCP 与 Worker 在本机监听。目前尚未监听。").FontSize(13).TextColor(theme.TextMuted)
+		}
+	})
+
+	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+		chrome.Card(c).Children(func() {
+			ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+				chrome.ReadoutCell(c, "MCP", "127.0.0.1:9401", "对外 Agent HTTP 端点", theme.Run)
+				chrome.ReadoutCell(c, "Worker", "127.0.0.1:9399", "内部 idalib 进程通信", theme.Live)
+			})
+		})
+
+		chrome.Plate(c).Padding(16, 20).Children(func() {
+			ui.Row(c).Justify(ui.Center).Gap(12).AlignItems(ui.Center).Children(func() {
+				ui.Column(c).AlignItems(ui.Center).Gap(3).Children(func() {
+					ui.Text(c, "AI Agent").FontSize(13).FontWeight(500).TextColor(theme.Text)
+					ui.Text(c, "Claude / Codex").FontSize(11).TextColor(theme.TextMuted)
+				})
+				chrome.ConduitBridge(c, "127.0.0.1:9401", d.Listening)
+				ui.Column(c).AlignItems(ui.Center).Gap(3).Children(func() {
+					ui.Text(c, "Jig").FontSize(13).FontWeight(500).TextColor(theme.Text)
+					ui.Text(c, "本机中心").FontSize(11).TextColor(theme.TextMuted)
+				})
+				chrome.ConduitBridge(c, "127.0.0.1:9399", d.Listening)
+				ui.Column(c).AlignItems(ui.Center).Gap(3).Children(func() {
+					ui.Text(c, "idalib Worker").FontSize(13).FontWeight(500).TextColor(theme.Text)
+					ui.Text(c, "无头分析进程").FontSize(11).TextColor(theme.TextMuted)
+				})
+			})
+		})
+	})
+}
+
+func agents(c *ui.Context, d *desk.Desk) {
+	snippet := `{"mcpServers":{"jig":{"url":"http://127.0.0.1:9401/mcp"}}}`
+
+	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "Agent 客户端连接").FontSize(18).FontWeight(500).TextColor(theme.Text)
+			ui.Spacer(c)
+
+			copyBtn := chrome.PrimaryButton(c, "复制 MCP JSON 配置", chrome.IconCopy).Label("复制配置")
+			if copyBtn.Clicked() {
+				mygo.Clipboard.WriteText(snippet)
+				d.Notice = "已复制 MCP 配置 JSON"
+			}
+		})
+		ui.Text(c, "在外部 AI Agent 中配置 MCP 服务端点即可直接调用 idalib 进行逆向分析。").FontSize(13).TextColor(theme.TextMuted)
+	})
+
+	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+		chrome.Card(c).Children(func() {
+			ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+				chrome.ReadoutCell(c, "端点 URL", "http://127.0.0.1:9401/mcp", "本机回环 HTTP 入口", theme.Live)
+				chrome.ReadoutCell(c, "协议", "Streamable HTTP (SSE) / JSON-RPC", "标准 MCP 传输层", theme.Run)
+			})
+		})
+
+		// Code Editor Window Card with Line Numbers (harmonious slate surface)
+		ui.Column(c).Gap(8).Children(func() {
+			chrome.Kicker(c, "配置片段")
+			chrome.Card(c).Clip().Children(func() {
+				ui.Row(c).Height(32).Padding(0, 14).Background(theme.Well).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).AlignItems(ui.Center).Children(func() {
+					ui.Text(c, "mcp.json").FontSize(11).Font("SF Mono").TextColor(theme.Text)
+					ui.Spacer(c)
+					ui.Text(c, "Claude · Codex · OpenCode").FontSize(11).TextColor(theme.TextMuted)
+				})
+
+				codeLines := []struct {
+					no   string
+					text string
+					col  ui.Color
+				}{
+					{"1", `{`, theme.TextMuted},
+					{"2", `  "mcpServers": {`, theme.Text},
+					{"3", `    "jig": {`, theme.Text},
+					{"4", `      "url": "http://127.0.0.1:9401/mcp"`, theme.Text},
+					{"5", `    }`, theme.Text},
+					{"6", `  }`, theme.Text},
+					{"7", `}`, theme.TextMuted},
+				}
+				ui.Column(c).Padding(14, 18).Gap(4).Children(func() {
+					for _, ln := range codeLines {
+						ui.Row(c).Gap(16).AlignItems(ui.Center).Children(func() {
+							ui.Text(c, ln.no).FontSize(11).Font("SF Mono").TextColor(theme.Muted).Width(16)
+							ui.Text(c, ln.text).FontSize(12).Font("SF Mono").TextColor(ln.col)
+						})
+					}
+				})
+			})
+		})
+	})
+}
+
+func appearance(c *ui.Context) {
+	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "外观").FontSize(18).FontWeight(500).TextColor(theme.Text)
+			chrome.Stage(c, "done", "浅色固定")
+		})
+		ui.Text(c, "浅色，中文。不提供主题开关。").FontSize(13).TextColor(theme.TextMuted)
+	})
+
+	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+		chrome.Card(c).Children(func() {
+			ui.Row(c).Dividers(1, theme.Border).AlignItems(ui.Stretch).Children(func() {
+				chrome.ReadoutCell(c, "语言", "简体中文", "界面显示语言", theme.Text)
+				chrome.ReadoutCell(c, "外观", "浅色", "白底，故障才用红色", theme.Text)
+			})
+		})
+	})
+}
+
+func installTitle(d *desk.Desk) string {
+	if d.IdaDir != "" {
+		return filepath.Base(d.IdaDir)
+	}
+	st := d.Runtime()
+	if st.Found {
+		return filepath.Base(st.Install)
+	}
+	return "未指定安装目录"
+}
+
+func pythonShortName(st idalib.Status) string {
+	if st.Python != "" {
+		return filepath.Base(st.Python)
+	}
+	return "python3"
+}
+
+func pythonSummary(st idalib.Status) string {
+	if st.Python != "" {
+		return product.ShortPath(st.Python)
+	}
+	return "可用"
+}
+
+func installLine(d *desk.Desk) string {
+	if d.IdaDir != "" {
+		return product.ShortPath(d.IdaDir)
+	}
+	st := d.Runtime()
+	if st.Found {
+		return "探测到 " + product.ShortPath(st.Install)
+	}
+	return "未设置"
+}

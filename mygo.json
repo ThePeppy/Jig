@@ -1,0 +1,6 @@
+{
+  "name": "Jig",
+  "identifier": "app.jig",
+  "version": "0.1.0",
+  "out": "build"
+}

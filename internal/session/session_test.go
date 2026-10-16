@@ -1,0 +1,51 @@
+package session
+
+import (
+	"context"
+	"testing"
+)
+
+func TestSessionManagerLifecycle(t *testing.T) {
+	m := NewManager()
+
+	s := &Session{
+		ID:           "test-session-1",
+		TargetName:   "firmware.bin",
+		SourcePath:   "/tmp/firmware.bin",
+		DatabasePath: "/tmp/firmware.i64",
+		PID:          12345,
+		State:        StateReady,
+	}
+
+	m.Register(s)
+
+	if len(m.Sessions()) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(m.Sessions()))
+	}
+
+	found, ok := m.FindByPath("/tmp/firmware.bin")
+	if !ok || found.ID != "test-session-1" {
+		t.Fatalf("expected to find session by source path")
+	}
+
+	foundDB, okDB := m.FindByPath("/tmp/firmware.i64")
+	if !okDB || foundDB.ID != "test-session-1" {
+		t.Fatalf("expected to find session by database path")
+	}
+
+	if err := m.Close("test-session-1"); err != nil {
+		t.Fatalf("unexpected close error: %v", err)
+	}
+
+	if len(m.Sessions()) != 0 {
+		t.Fatalf("expected 0 sessions after close")
+	}
+}
+
+func TestSessionLaunchValidation(t *testing.T) {
+	m := NewManager()
+	_, err := m.Launch(context.Background(), "", "", "", "", "")
+	if err == nil {
+		t.Fatal("expected error launching with empty target path")
+	}
+}
