@@ -111,11 +111,7 @@ func empty(c *ui.Context, d *desk.Desk) {
 				chrome.HeroEmblem(c, chrome.IconLibrary, theme.Text)
 
 				ui.Column(c).AlignItems(ui.Center).Gap(8).Children(func() {
-					ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, "还没有文件").FontSize(18).FontWeight(500).TextColor(theme.Text)
-						chrome.Stage(c, "idle", "空")
-					})
-
+					ui.Text(c, "还没有文件").FontSize(15).FontWeight(500).TextColor(theme.Text)
 					ui.Text(c, "把任意二进制或已有数据库拖进窗口,或从下面添加。文件进入库,不会立刻打开。").
 						FontSize(13).
 						TextColor(theme.TextMuted).
@@ -172,18 +168,18 @@ func list(c *ui.Context, d *desk.Desk, rows []libRow) {
 	focus, _ := focused(d, rows)
 
 	pane.Children(func() {
-		ui.Row(c).Height(36).Padding(0, 14).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Height(32).Padding(0, 12).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, fmt.Sprintf("共 %d 项", len(rows))).FontSize(11).TextColor(theme.TextMuted)
 			ui.Spacer(c)
 			if openCount > 0 {
 				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(6, 6).Background(theme.Live)
+					ui.Box(c).Size(6, 6).Radius(3).Background(theme.Live)
 					ui.Text(c, fmt.Sprintf("%d 已打开", openCount)).FontSize(11).TextColor(theme.Text)
 				})
 			}
 		})
 
-		ui.Scroll(c).Grow(1).Padding(6, 6).Gap(3).Children(func() {
+		ui.Scroll(c).Grow(1).Padding(4, 6).Gap(2).Children(func() {
 			for _, r := range rows {
 				row(c, d, r, sameFocus(r, focus))
 			}
@@ -200,9 +196,9 @@ func row(c *ui.Context, d *desk.Desk, r libRow, on bool) {
 
 	item := ui.Row(c).
 		Key("lib-row-"+key).
-		MinHeight(52).
-		Padding(7, 10).
-		Radius(theme.CardR).
+		MinHeight(44).
+		Padding(6, 8).
+		Radius(theme.ControlR).
 		Cursor(ui.CursorPointer).
 		Transition(chrome.ColorTransition).
 		AlignItems(ui.Center).
@@ -215,7 +211,7 @@ func row(c *ui.Context, d *desk.Desk, r libRow, on bool) {
 		on = true
 	}
 
-	chrome.StyleSidebarRow(item, on, accent)
+	chrome.StyleSidebarRow(c, item, on, accent)
 
 	item.Children(func() {
 		chrome.CartridgeTile(c, extShort(tilePath(r)), accent, false)
@@ -272,9 +268,9 @@ func detail(c *ui.Context, d *desk.Desk, r libRow) {
 	pane.Children(func() {
 		ui.Row(c).
 			Key("lib-head-"+key).
-			Padding(22, 28, 18, 28).
+			Padding(16, 24, 12, 24).
 			BorderWidth(0, 0, 1, 0).
-			BorderColor(theme.BorderSubtle).
+			BorderColor(chrome.Wash(c, "rule")).
 			Gap(14).
 			AlignItems(ui.Center).
 			Transition(chrome.DetailTransition).
@@ -283,7 +279,7 @@ func detail(c *ui.Context, d *desk.Desk, r libRow) {
 
 				ui.Column(c).Grow(1).Gap(5).Children(func() {
 					ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, r.entry.Name).FontSize(18).FontWeight(500).TextColor(theme.Text).SingleLine()
+						ui.Text(c, r.entry.Name).FontSize(15).FontWeight(500).TextColor(theme.Text).SingleLine()
 
 						if missing {
 							chrome.Stage(c, "bad", "文件缺失")
@@ -330,12 +326,12 @@ func detail(c *ui.Context, d *desk.Desk, r libRow) {
 		ui.Scroll(c).
 			Key("lib-body-"+key).
 			Grow(1).
-			Padding(20, 28).
-			Gap(18).
+			Padding(16, 24).
+			Gap(12).
 			Transition(chrome.DetailTransition).
 			Children(func() {
 				if missing {
-					ui.Row(c).Padding(8, 12).Radius(theme.CardR).Background(theme.TroubleBg).Border(1, theme.Trouble).Gap(8).AlignItems(ui.Center).Children(func() {
+					ui.Row(c).Padding(8, 12).Radius(theme.ControlR).Background(chrome.Wash(c, "fault")).Border(1, theme.Trouble).Gap(8).AlignItems(ui.Center).Children(func() {
 						ui.Icon(c, chrome.IconAlert).Size(14, 14).TextColor(theme.Trouble)
 						ui.Text(c, "文件缺失: 磁盘上已找不到该路径").FontSize(12).TextColor(theme.Trouble)
 					})
@@ -348,7 +344,7 @@ func detail(c *ui.Context, d *desk.Desk, r libRow) {
 
 				if !r.orphan {
 					chrome.Card(c).Children(func() {
-						ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+						ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
 							chrome.ReadoutCell(c, "类型", "文件", "装载与报错由 idalib 决定", accent)
 							chrome.ReadoutCell(c, "大小", formatFileSize(r.entry.Path), filepath.Base(r.entry.Path), theme.Run)
 
@@ -459,7 +455,7 @@ func waitLabel(t time.Time) string {
 
 func sessionBody(c *ui.Context, s *session.Session) {
 	chrome.Card(c).Children(func() {
-		ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+		ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
 			chrome.ReadoutCell(c, "会话 ID", s.ID, "本机实例句柄", theme.Run)
 			chrome.ReadoutCell(c, "进程 PID", fmt.Sprintf("%d", s.PID), "分析进程", theme.Live)
 			chrome.ReadoutCell(c, "运行时长", s.Elapsed(), "无界面驻留中", theme.Live)
@@ -504,10 +500,10 @@ func callLog(c *ui.Context, d *desk.Desk, r libRow) {
 	ui.Column(c).Gap(8).Children(func() {
 		chrome.Kicker(c, "这次打开以来", len(fileTraces))
 		if len(fileTraces) > 0 {
-			chrome.Card(c).Dividers(1, theme.BorderSubtle).Children(func() {
+			chrome.Card(c).Dividers(1, chrome.Wash(c, "rule")).Children(func() {
 				for _, tr := range fileTraces {
-					ui.Row(c).MinHeight(40).Padding(0, 16).Gap(14).AlignItems(ui.Center).Children(func() {
-						ui.Box(c).Size(6, 6).Background(chrome.CallMark(tr.ok))
+					ui.Row(c).MinHeight(36).Padding(0, 14).Gap(12).AlignItems(ui.Center).Children(func() {
+						ui.Box(c).Size(6, 6).Radius(3).Background(chrome.CallMark(tr.ok))
 						ui.Text(c, tr.fn).FontSize(12).FontWeight(500).Font(theme.FontMono).TextColor(theme.Text).Width(156).SingleLine()
 						ui.Row(c).Width(96).Gap(8).AlignItems(ui.Center).Children(func() {
 							chrome.LatencyBar(c, tr.dur, tr.ok)

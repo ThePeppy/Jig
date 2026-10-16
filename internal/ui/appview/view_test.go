@@ -153,7 +153,11 @@ func TestActiveSessionsAndTracesRender(t *testing.T) {
 func TestRenderAllStudioScreens(t *testing.T) {
 	outDir := os.Getenv("JIG_RENDER_DIR")
 	savePNG := func(name string, view func(*ui.Context)) {
-		img := ui.Render(view, 1280, 800, 2)
+		tt := ui.NewTester(view, 1280, 800)
+		tt.SetTitleBar(ui.TitleBar{Height: 44, Left: 84, Right: 14})
+		tt.SetScale(2)
+		tt.SetVibrancy(true)
+		img := tt.Image()
 		if img == nil {
 			t.Fatalf("nil render for %s", name)
 		}
@@ -469,6 +473,19 @@ func TestCloseClearsTheReadyStrip(t *testing.T) {
 	}
 	if len(d.Sessions.Sessions()) != 0 {
 		t.Fatalf("sessions still live: %d", len(d.Sessions.Sessions()))
+	}
+}
+func TestRailFrostStaysClearerThanTheDesk(t *testing.T) {
+	d := openDesk(t)
+	tt := ui.NewTester(New(d), 1280, 800)
+	tt.SetTitleBar(ui.TitleBar{Height: 44, Left: 84, Right: 14})
+	tt.SetVibrancy(true)
+	img := tt.Image()
+	// Away from labels and the hairline. The rail is 200 DIP wide.
+	rail := img.RGBAAt(40, 520)
+	desk := img.RGBAAt(640, 520)
+	if int(desk.A) < int(rail.A)+80 {
+		t.Fatalf("rail %v is not clearly more transparent than the desk %v", rail, desk)
 	}
 }
 

@@ -21,6 +21,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	mygo.Theme.SetSource(mygo.ThemeDark)
 	mygo.App.WhenReady(func() {
 		w := mygo.NewWindow(mygo.WindowOptions{
 			Title:                product.Name,
@@ -32,9 +33,11 @@ func main() {
 			TitleBarStyle:        mygo.TitleBarHidden,
 			TitleBarHeight:       theme.TitleBarH,
 			TrafficLightPosition: &mygo.Point{X: 12, Y: 14},
-			BackgroundColor:      theme.WindowHex,
-			StateKey:             "main",
-			Content:              ui.View(appview.New(d)),
+			// Under-window blur is the ground. The rail tints it lightly.
+			Vibrancy:        mygo.VibrancyUnderWindow,
+			BackgroundColor: theme.WindowHex,
+			StateKey:        "main",
+			Content:         ui.View(appview.New(d)),
 		})
 		d.NotifyUI = func() { w.Update(func() {}) }
 		d.Post = w.Update

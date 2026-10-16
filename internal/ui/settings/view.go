@@ -29,15 +29,15 @@ func list(c *ui.Context, d *desk.Desk) {
 		portMeta = "监听中"
 	}
 	pane.Children(func() {
-		ui.Row(c).Height(36).Padding(0, 14).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).AlignItems(ui.Center).Children(func() {
+		ui.Row(c).Height(32).Padding(0, 12).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).AlignItems(ui.Center).Children(func() {
 			ui.Text(c, "系统选项").FontSize(11).TextColor(theme.TextMuted)
 		})
 
-		ui.Scroll(c).Grow(1).Padding(6, 6).Gap(3).Children(func() {
+		ui.Scroll(c).Grow(1).Padding(4, 6).Gap(2).Children(func() {
 			item(c, d, desk.SettingsIDA, "IDA", "目录", "安装路径与运行时")
 			item(c, d, desk.SettingsPorts, "端口", portMeta, "MCP 与 Worker")
 			item(c, d, desk.SettingsAgents, "Agent", "客户端连接", "Claude、Codex、OpenCode")
-			item(c, d, desk.SettingsAppearance, "界面", "中文", "浅色固定")
+			item(c, d, desk.SettingsAppearance, "界面", "中文", "深色玻璃")
 		})
 	})
 }
@@ -46,9 +46,9 @@ func item(c *ui.Context, d *desk.Desk, id desk.SettingsSection, title, meta, sub
 	on := d.Section == id
 	row := ui.Column(c).
 		Key(fmt.Sprintf("set-row-%d", id)).
-		MinHeight(50).
-		Padding(8, 12).
-		Radius(theme.CardR).
+		MinHeight(40).
+		Padding(6, 10).
+		Radius(theme.ControlR).
 		Cursor(ui.CursorPointer).
 		Transition(chrome.ColorTransition).
 		Justify(ui.Center).
@@ -61,7 +61,7 @@ func item(c *ui.Context, d *desk.Desk, id desk.SettingsSection, title, meta, sub
 		on = true
 	}
 
-	chrome.StyleSidebarRow(row, on, theme.PrimaryBg)
+	chrome.StyleSidebarRow(c, row, on, theme.PrimaryBg)
 
 	titleColor := theme.TextMuted
 	if on {
@@ -104,9 +104,9 @@ func ida(c *ui.Context, d *desk.Desk) {
 	st := d.Runtime()
 	ready := d.IdaDir != "" || st.Found
 
-	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+	ui.Column(c).Padding(16, 24, 12, 24).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).Gap(4).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "IDA").FontSize(18).FontWeight(500).TextColor(theme.Text)
+			ui.Text(c, "IDA").FontSize(15).FontWeight(500).TextColor(theme.Text)
 			if ready {
 				chrome.Stage(c, "ok", "就绪")
 			} else {
@@ -130,10 +130,10 @@ func ida(c *ui.Context, d *desk.Desk) {
 		ui.Text(c, "Jig 加载本机 libidalib，不启动 IDA 界面，也不启动 Python。").FontSize(13).TextColor(theme.TextMuted)
 	})
 
-	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+	ui.Scroll(c).Grow(1).Padding(16, 24).Gap(12).Children(func() {
 		// 3-Segment Horizontal Readout Strip
 		chrome.Card(c).Children(func() {
-			ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+			ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
 				idalibVal := "未找到"
 				idalibCol := theme.Idle
 				if st.Library != "" {
@@ -168,9 +168,9 @@ func ida(c *ui.Context, d *desk.Desk) {
 }
 
 func ports(c *ui.Context, d *desk.Desk) {
-	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+	ui.Column(c).Padding(16, 24, 12, 24).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).Gap(4).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "端口").FontSize(18).FontWeight(500).TextColor(theme.Text)
+			ui.Text(c, "端口").FontSize(15).FontWeight(500).TextColor(theme.Text)
 			if d.Listening {
 				chrome.Stage(c, "ok", "监听中")
 			} else {
@@ -184,9 +184,9 @@ func ports(c *ui.Context, d *desk.Desk) {
 		}
 	})
 
-	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+	ui.Scroll(c).Grow(1).Padding(16, 24).Gap(12).Children(func() {
 		chrome.Card(c).Children(func() {
-			ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+			ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
 				chrome.ReadoutCell(c, "MCP", "127.0.0.1:9401", "对外 Agent HTTP 端点", theme.Run)
 				chrome.ReadoutCell(c, "Worker", "127.0.0.1:9399", "内部 idalib 进程通信", theme.Live)
 			})
@@ -216,9 +216,9 @@ func ports(c *ui.Context, d *desk.Desk) {
 func agents(c *ui.Context, d *desk.Desk) {
 	snippet := `{"mcpServers":{"jig":{"url":"http://127.0.0.1:9401/mcp"}}}`
 
-	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+	ui.Column(c).Padding(16, 24, 12, 24).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).Gap(4).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "Agent 客户端连接").FontSize(18).FontWeight(500).TextColor(theme.Text)
+			ui.Text(c, "Agent 客户端连接").FontSize(15).FontWeight(500).TextColor(theme.Text)
 			ui.Spacer(c)
 
 			copyBtn := chrome.PrimaryButton(c, "复制 MCP JSON 配置", chrome.IconCopy).Label("复制配置")
@@ -230,9 +230,9 @@ func agents(c *ui.Context, d *desk.Desk) {
 		ui.Text(c, "在外部 AI Agent 中配置 MCP 服务端点即可直接调用 idalib 进行逆向分析。").FontSize(13).TextColor(theme.TextMuted)
 	})
 
-	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+	ui.Scroll(c).Grow(1).Padding(16, 24).Gap(12).Children(func() {
 		chrome.Card(c).Children(func() {
-			ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+			ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
 				chrome.ReadoutCell(c, "端点 URL", "http://127.0.0.1:9401/mcp", "本机回环 HTTP 入口", theme.Live)
 				chrome.ReadoutCell(c, "协议", "Streamable HTTP (SSE) / JSON-RPC", "标准 MCP 传输层", theme.Run)
 			})
@@ -242,7 +242,7 @@ func agents(c *ui.Context, d *desk.Desk) {
 		ui.Column(c).Gap(8).Children(func() {
 			chrome.Kicker(c, "配置片段")
 			chrome.Card(c).Clip().Children(func() {
-				ui.Row(c).Height(32).Padding(0, 14).Background(theme.Well).BorderWidth(0, 0, 1, 0).BorderColor(theme.Border).AlignItems(ui.Center).Children(func() {
+				ui.Row(c).Height(32).Padding(0, 14).Background(chrome.Wash(c, "plate")).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "hairline")).AlignItems(ui.Center).Children(func() {
 					ui.Text(c, "mcp.json").FontSize(11).Font("SF Mono").TextColor(theme.Text)
 					ui.Spacer(c)
 					ui.Text(c, "Claude · Codex · OpenCode").FontSize(11).TextColor(theme.TextMuted)
@@ -275,19 +275,19 @@ func agents(c *ui.Context, d *desk.Desk) {
 }
 
 func appearance(c *ui.Context) {
-	ui.Column(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(6).Children(func() {
+	ui.Column(c).Padding(16, 24, 12, 24).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).Gap(4).Children(func() {
 		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "外观").FontSize(18).FontWeight(500).TextColor(theme.Text)
-			chrome.Stage(c, "done", "浅色固定")
+			ui.Text(c, "外观").FontSize(15).FontWeight(500).TextColor(theme.Text)
+			chrome.Stage(c, "done", "深色玻璃")
 		})
-		ui.Text(c, "浅色，中文。不提供主题开关。").FontSize(13).TextColor(theme.TextMuted)
+		ui.Text(c, "深色玻璃，中文。侧栏更透，内容区更实。不提供主题开关。").FontSize(13).TextColor(theme.TextMuted)
 	})
 
-	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+	ui.Scroll(c).Grow(1).Padding(16, 24).Gap(12).Children(func() {
 		chrome.Card(c).Children(func() {
-			ui.Row(c).Dividers(1, theme.Border).AlignItems(ui.Stretch).Children(func() {
+			ui.Row(c).Dividers(1, chrome.Wash(c, "hairline")).AlignItems(ui.Stretch).Children(func() {
 				chrome.ReadoutCell(c, "语言", "简体中文", "界面显示语言", theme.Text)
-				chrome.ReadoutCell(c, "外观", "浅色", "白底，故障才用红色", theme.Text)
+				chrome.ReadoutCell(c, "外观", "深色玻璃", "侧栏更透，内容更实", theme.Text)
 			})
 		})
 	})

@@ -1,11 +1,14 @@
-// Package chrome draws the window frame: plates, keys, and the one signal mark.
+// Package chrome draws the window frame.
+// The system blur is the ground. The rail is the frame: a thin tint, so
+// the frost shows through. The desk is a less transparent plate of the
+// same material. It does not paint a shader, and it does not draw a
+// second window corner or a theme switch.
 package chrome
 
 import (
 	"fmt"
 	"time"
 
-	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
 	"jig/internal/desk"
@@ -28,144 +31,286 @@ var (
 	}
 )
 
-// Title is the toolbar. Tabs and the add key are Liquid Glass capsules.
-// The window's own corner clips this band; it is not a second frame.
-func Title(c *ui.Context, d *desk.Desk) {
+// Wash is one depth of the window glass. Over vibrancy it is a
+// specialized tint, so the desktop frost shows through at that
+// region's opacity. Elsewhere it is the solid token of the same role.
+func Wash(c *ui.Context, role string) ui.Color {
+	if c.Vibrancy() {
+		switch role {
+		case "rail":
+			return theme.RailGlass
+		case "desk":
+			return theme.DeskGlass
+		case "railHover":
+			return theme.RailHoverGlass
+		case "railActive":
+			return theme.RailActiveGlass
+		case "hover":
+			return theme.DeskHoverGlass
+		case "active":
+			return theme.DeskActiveGlass
+		case "card":
+			return theme.CardGlass
+		case "plate":
+			return theme.PlateGlass
+		case "band":
+			return theme.BandGlass
+		case "control":
+			return theme.ControlGlass
+		case "primary":
+			return theme.PrimaryGlass
+		case "primaryHover":
+			return theme.PrimaryHoverGlass
+		case "primaryPressed":
+			return theme.PrimaryPressedGlass
+		case "fault":
+			return theme.FaultGlass
+		case "rule":
+			return theme.RuleGlass
+		case "hairline":
+			return theme.HairlineGlass
+		case "field":
+			return theme.DeskGlass
+		}
+	}
+	switch role {
+	case "rail":
+		return theme.Sidebar
+	case "desk", "field", "band":
+		return theme.Canvas
+	case "railHover", "hover":
+		return theme.Hover
+	case "railActive", "active":
+		return theme.Active
+	case "card", "control":
+		return theme.Card
+	case "plate":
+		return theme.Well
+	case "primary":
+		return theme.PrimaryBg
+	case "primaryHover":
+		return theme.AccentHover
+	case "primaryPressed":
+		return theme.AccentPressed
+	case "fault":
+		return theme.TroubleBg
+	case "rule":
+		return theme.BorderSubtle
+	case "hairline":
+		return theme.Border
+	}
+	return theme.Canvas
+}
+
+func primaryInk(c *ui.Context) ui.Color {
+	return theme.PrimaryText
+}
+
+// Shell is the window. The blur is the ground. The rail and the desk
+// each paint their own tint, so the two regions do not collapse into
+// one wash.
+func Shell(c *ui.Context, d *desk.Desk, content func()) {
 	bar := c.TitleBar()
 	h := bar.Height
 	if h < theme.TitleBarH {
 		h = theme.TitleBarH
 	}
-
 	leftPad := bar.Left
 	if leftPad < 80 {
 		leftPad = 80
 	}
+	rightPad := bar.Right
+	if rightPad < 12 {
+		rightPad = 12
+	}
+	if c.Vibrancy() {
+		c.Root().Background(ui.Transparent)
+	}
 
-	ui.Row(c).
-		Height(h).
-		Padding(0, bar.Right+12, 0, leftPad).
-		Background(theme.Window).
-		BorderWidth(0, 0, 1, 0).
-		BorderColor(theme.Border).
-		Gap(8).
-		AlignItems(ui.Center).
-		DragWindow().
-		Children(func() {
-			sessCount := len(d.Sessions.Sessions())
-			ui.Row(c).
-				Height(32).
-				Padding(2).
-				Gap(2).
-				Radius(16).
-				Material(glass.Glass{}).
-				AlignItems(ui.Center).
-				Children(func() {
-					tab(c, d, desk.TabLibrary, "数据库", sessCount > 0)
-					tab(c, d, desk.TabTrace, "记录", false)
-					tab(c, d, desk.TabSettings, "设置", false)
-				})
+	ui.Row(c).Fill().AlignItems(ui.Stretch).Children(func() {
+		rail(c, d, h, leftPad)
+		ui.Box(c).Width(1).Background(Wash(c, "hairline"))
+		desk := ui.Column(c).Grow(1).AlignSelf(ui.Stretch).Background(Wash(c, "desk"))
+		desk.Children(func() {
+			contentBar(c, d, h, rightPad)
+			content()
+		})
+	})
+}
 
-			plus := ui.Box(c).
-				Size(32, 32).
-				Radius(16).
-				Material(glass.Glass{Interactive: true}).
-				Cursor(ui.CursorPointer).
-				Center().
-				Focusable().
-				Label("添加文件")
-			if plus.Clicked() && d.RequestAdd != nil {
-				d.RequestAdd()
-			}
-			plus.Children(func() {
-				ui.Icon(c, IconPlus).Size(12, 12).TextColor(theme.Text)
+func rail(c *ui.Context, d *desk.Desk, h, leftPad float32) {
+	col := ui.Column(c).Width(theme.NavW).AlignSelf(ui.Stretch).Background(Wash(c, "rail"))
+	col.Children(func() {
+		ui.Row(c).
+			Height(h).
+			Padding(0, 14, 0, leftPad).
+			AlignItems(ui.Center).
+			Gap(8).
+			DragWindow().
+			Children(func() {
+				ui.Icon(c, IconBrand).Size(14, 14).TextColor(theme.Accent)
+				ui.Text(c, "Jig").FontSize(13).FontWeight(600).TextColor(theme.Text)
 			})
 
-			ui.Spacer(c)
+		ui.Column(c).Padding(6, 8, 0, 8).Gap(1).Children(func() {
+			navItem(c, d, desk.TabLibrary, "数据库", IconLibrary, len(d.Sessions.Sessions()) > 0)
+			navItem(c, d, desk.TabTrace, "记录", IconTrace, false)
+			navItem(c, d, desk.TabSettings, "设置", IconSettings, false)
+		})
 
-			st := d.Runtime()
-			on := d.IdaDir != "" || st.Found
-			label := "127.0.0.1:9401"
-			if on {
-				label = "idalib · 127.0.0.1:9401"
+		ui.Spacer(c)
+		addRow(c, d)
+	})
+}
+
+func addRow(c *ui.Context, d *desk.Desk) {
+	ui.Row(c).
+		Height(theme.StatusH).
+		Padding(0, 8).
+		BorderWidth(1, 0, 0, 0).
+		BorderColor(Wash(c, "hairline")).
+		AlignItems(ui.Center).
+		Children(func() {
+			add := ui.Row(c).
+				Grow(1).
+				Height(26).
+				Padding(0, 8).
+				Radius(theme.ControlR).
+				Gap(8).
+				AlignItems(ui.Center).
+				Cursor(ui.CursorPointer).
+				Focusable().
+				Label("添加文件")
+			if add.Hovered() {
+				add.Background(Wash(c, "railHover"))
 			}
-			ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-				mark(c, on, theme.Live)
-				ui.Text(c, label).FontSize(11).Font(theme.FontMono).TextColor(theme.TextMuted)
+			if add.Clicked() && d.RequestAdd != nil {
+				d.RequestAdd()
+			}
+			add.Children(func() {
+				ui.Icon(c, IconPlus).Size(13, 13).TextColor(theme.TextMuted)
+				ui.Text(c, "添加文件").FontSize(13).TextColor(theme.Text)
 			})
 		})
 }
 
-func tab(c *ui.Context, d *desk.Desk, id desk.Tab, label string, liveDot bool) {
+func navItem(c *ui.Context, d *desk.Desk, id desk.Tab, label string, icon *ui.SVG, liveDot bool) {
 	on := d.Tab == id
 	btn := ui.Row(c).
 		Key(id).
-		Height(28).
-		Padding(0, 12).
-		Radius(14).
-		Gap(6).
+		Height(30).
+		Padding(0, 8).
+		Radius(theme.ControlR).
+		Gap(8).
 		AlignItems(ui.Center).
 		Cursor(ui.CursorPointer).
 		Focusable().
 		Label(label)
-	if on {
-		btn.Background(theme.Pane)
+	switch {
+	case on:
+		btn.Background(Wash(c, "railActive"))
+	case btn.Hovered():
+		btn.Background(Wash(c, "railHover"))
 	}
 	if btn.Clicked() {
 		d.Tab = id
 		d.Notice = ""
 	}
-	textColor := theme.TextMuted
+	iconCol := theme.Faint
+	textCol := theme.TextMuted
+	weight := 400
 	if on {
-		textColor = theme.Text
+		iconCol = theme.Accent
+		textCol = theme.Text
+		weight = 500
 	}
 	btn.Children(func() {
-		ui.Text(c, label).FontSize(13).FontWeight(500).TextColor(textColor)
+		ui.Icon(c, icon).Size(15, 15).TextColor(iconCol)
+		ui.Text(c, label).FontSize(13).FontWeight(weight).TextColor(textCol).Grow(1)
 		if liveDot {
 			mark(c, true, theme.Live)
 		}
 	})
 }
 
-// Pane is the content surface. It has no corner of its own: the system
-// window corner is the only outer corner.
+func contentBar(c *ui.Context, d *desk.Desk, h, rightPad float32) {
+	ui.Row(c).
+		Height(h).
+		Padding(0, rightPad+16, 0, 24).
+		AlignItems(ui.Center).
+		DragWindow().
+		BorderWidth(0, 0, 1, 0).
+		BorderColor(Wash(c, "hairline")).
+		Children(func() {
+			ui.Text(c, sectionName(d.Tab)).FontSize(13).FontWeight(500).TextColor(theme.Text)
+			ui.Spacer(c)
+			endpoint(c, d)
+		})
+}
+
+func sectionName(tab desk.Tab) string {
+	switch tab {
+	case desk.TabTrace:
+		return "记录"
+	case desk.TabSettings:
+		return "设置"
+	default:
+		return "数据库"
+	}
+}
+
+func endpoint(c *ui.Context, d *desk.Desk) {
+	st := d.Runtime()
+	on := d.IdaDir != "" || st.Found
+	label := "127.0.0.1:9401"
+	if on {
+		label = "idalib · 127.0.0.1:9401"
+	}
+	ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
+		mark(c, on, theme.Live)
+		ui.Text(c, label).FontSize(11).Font(theme.FontMono).TextColor(theme.TextMuted)
+	})
+}
+
+// Pane is the desk. Over a material it draws no fill. The system corner
+// is the only outer corner.
 func Pane(c *ui.Context) ui.Element {
-	return ui.Column(c).
-		Background(theme.Pane).
-		Clip().
-		AlignSelf(ui.Stretch)
+	col := ui.Column(c).Clip().AlignSelf(ui.Stretch)
+	if !c.Vibrancy() {
+		col.Background(theme.Canvas)
+	}
+	return col
 }
 
 // Sidebar is the edge-to-edge list. A hairline splits it from the detail.
 func Sidebar(c *ui.Context) ui.Element {
 	return Pane(c).
 		Width(theme.ListW).
-		Background(theme.Well).
 		BorderWidth(0, 1, 0, 0).
-		BorderColor(theme.Border)
+		BorderColor(Wash(c, "hairline"))
 }
 
-// Card is a ruled group on a plate. The line groups it; there is no shadow.
+// Card is a lifted group on the material. The line groups it; there is no shadow.
 func Card(c *ui.Context) ui.Element {
 	return ui.Column(c).
-		Background(theme.Pane).
+		Background(Wash(c, "card")).
 		Radius(theme.CardR).
-		Border(1, theme.Border)
+		Border(1, Wash(c, "hairline"))
 }
 
-// Plate is a recessed spec field.
+// Plate is a recessed spec field, a deeper veil of the same material.
 func Plate(c *ui.Context) ui.Element {
 	return ui.Column(c).
-		Background(theme.Well).
+		Background(Wash(c, "plate")).
 		Radius(theme.CardR).
-		Border(1, theme.Border)
+		Border(1, Wash(c, "hairline"))
 }
 
 // ReadoutCell is one cell of a spec strip. The value is type, not a colored lamp.
 func ReadoutCell(c *ui.Context, label, value, sub string, _ ui.Color) {
-	ui.Column(c).Grow(1).Basis(0).Padding(12, 16).Gap(4).Children(func() {
+	ui.Column(c).Grow(1).Basis(0).Padding(10, 14).Gap(3).Children(func() {
 		ui.Text(c, label).FontSize(11).TextColor(theme.Muted)
-		ui.Text(c, value).FontSize(15).FontWeight(500).Font(theme.FontMono).TextColor(theme.Text).SingleLine()
+		ui.Text(c, value).FontSize(13).FontWeight(500).Font(theme.FontMono).TextColor(theme.Text).SingleLine()
 		if sub != "" {
 			ui.Text(c, sub).FontSize(11).TextColor(theme.Faint).SingleLine()
 		}
@@ -175,7 +320,7 @@ func ReadoutCell(c *ui.Context, label, value, sub string, _ ui.Color) {
 // PathSlotCard is a path spec: role, file name, full path.
 // It sizes to its text. In a row, Grow(1).Basis(0) the result so cards share width.
 func PathSlotCard(c *ui.Context, roleLabel, fileName, fullPath, badge string, badgeTone string) ui.Element {
-	card := Card(c).Padding(12, 16).Gap(6)
+	card := Card(c).Padding(12, 14).Gap(4)
 	card.Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			ui.Text(c, roleLabel).FontSize(12).FontWeight(500).TextColor(theme.TextMuted)
@@ -184,64 +329,66 @@ func PathSlotCard(c *ui.Context, roleLabel, fileName, fullPath, badge string, ba
 				Stage(c, badgeTone, badge)
 			}
 		})
-		ui.Text(c, fileName).FontSize(14).FontWeight(500).TextColor(theme.Text).SingleLine()
+		ui.Text(c, fileName).FontSize(13).FontWeight(500).TextColor(theme.Text).SingleLine()
 		ui.Text(c, fullPath).FontSize(12).Font(theme.FontMono).TextColor(theme.TextMuted).SingleLine()
 	})
 	return card
 }
 
-// PrimaryButton is an ink key. Press does not scale.
+// PrimaryButton is the action key. Over a material it is a light veil
+// with light text, not a solid chip. Without a material it is a dark key.
 func PrimaryButton(c *ui.Context, label string, icon *ui.SVG) ui.Element {
+	ink := primaryInk(c)
 	btn := ui.Row(c).
 		Height(28).
 		Padding(0, 12).
 		Radius(theme.ControlR).
-		Background(theme.PrimaryBg).
+		Background(Wash(c, "primary")).
 		Cursor(ui.CursorPointer).
-		Transition(ColorTransition).
 		Gap(6).
 		Center().
 		Focusable().
 		Label(label)
+	if c.Vibrancy() {
+		btn.Border(1, theme.Accent.Alpha(0.35))
+	}
 	if btn.Pressed() {
-		btn.Background(theme.LivePressed)
+		btn.Background(Wash(c, "primaryPressed"))
 	} else if btn.Hovered() {
-		btn.Background(theme.PrimaryHover)
+		btn.Background(Wash(c, "primaryHover"))
 	}
 	btn.Children(func() {
 		if icon != nil {
-			ui.Icon(c, icon).Size(11, 11).TextColor(theme.PrimaryText)
+			ui.Icon(c, icon).Size(11, 11).TextColor(ink)
 		}
-		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(theme.PrimaryText)
+		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(ink)
 	})
 	return btn
 }
 
-// GhostButton is a hairline key. Fault is oxide text, not a tinted pill.
+// GhostButton is a hairline key on the material. Fault is oxide text, not a tinted pill.
 func GhostButton(c *ui.Context, label string, icon *ui.SVG, danger bool) ui.Element {
 	btn := ui.Row(c).
 		Height(28).
-		Padding(0, 12).
+		Padding(0, 10).
 		Radius(theme.ControlR).
-		Background(theme.Pane).
-		Border(1, theme.BorderStrong).
+		Border(1, Wash(c, "hairline")).
 		Cursor(ui.CursorPointer).
-		Transition(ColorTransition).
 		Gap(6).
 		Center().
 		Focusable().
 		Label(label)
+	if !c.Vibrancy() {
+		btn.Background(theme.Card)
+	}
 	txtCol := theme.Text
 	iconCol := theme.TextMuted
 	if danger {
 		txtCol = theme.Trouble
 		iconCol = theme.Trouble
-		btn.BorderColor(theme.Trouble)
 	}
-	if btn.Pressed() {
-		btn.Background(theme.Active)
-	} else if btn.Hovered() {
-		btn.Background(theme.Hover)
+	if btn.Hovered() {
+		btn.Background(Wash(c, "hover"))
 	}
 	btn.Children(func() {
 		if icon != nil {
@@ -252,19 +399,23 @@ func GhostButton(c *ui.Context, label string, icon *ui.SVG, danger bool) ui.Elem
 	return btn
 }
 
-// BusyButton is an ink key that is working. It does not take another click.
+// BusyButton is the action key while it works. It does not take another click.
 func BusyButton(c *ui.Context, label string) ui.Element {
+	ink := primaryInk(c)
 	btn := ui.Row(c).
 		Height(28).
 		Padding(0, 12).
 		Radius(theme.ControlR).
-		Background(theme.PrimaryBg).
+		Background(Wash(c, "primary")).
 		Gap(6).
 		Center().
 		Label(label)
+	if c.Vibrancy() {
+		btn.Border(1, theme.Accent.Alpha(0.35))
+	}
 	btn.Children(func() {
-		spin(c, label, theme.PrimaryText)
-		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(theme.PrimaryText)
+		spin(c, label, ink)
+		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(ink)
 	})
 	return btn
 }
@@ -272,20 +423,20 @@ func BusyButton(c *ui.Context, label string) ui.Element {
 // BusyGhost is a hairline key that is working. Fault stays oxide, not a tint.
 func BusyGhost(c *ui.Context, label string, danger bool) ui.Element {
 	txt := theme.Text
-	border := theme.BorderStrong
 	if danger {
 		txt = theme.Trouble
-		border = theme.Trouble
 	}
 	btn := ui.Row(c).
 		Height(28).
-		Padding(0, 12).
+		Padding(0, 10).
 		Radius(theme.ControlR).
-		Background(theme.Pane).
-		Border(1, border).
+		Border(1, Wash(c, "hairline")).
 		Gap(6).
 		Center().
 		Label(label)
+	if !c.Vibrancy() {
+		btn.Background(theme.Card)
+	}
 	btn.Children(func() {
 		spin(c, label, txt)
 		ui.Text(c, label).FontSize(12).FontWeight(500).TextColor(txt)
@@ -304,7 +455,7 @@ func LiveStage(c *ui.Context, label string) {
 // Work is the process of a start or a close. Earlier steps are done.
 // The mark breathes and the bar moves so the wait is not a freeze.
 func Work(c *ui.Context, title, meta, detail string, steps []string, active int) {
-	Card(c).Padding(14, 16).Gap(10).Children(func() {
+	Card(c).Padding(12, 14).Gap(8).Children(func() {
 		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
 			pulse(c)
 			ui.Text(c, title).FontSize(13).FontWeight(500).TextColor(theme.Text)
@@ -338,12 +489,12 @@ func spin(c *ui.Context, key string, col ui.Color) {
 }
 
 func pulse(c *ui.Context) {
-	box := ui.Box(c).Size(6, 6).Background(theme.Live)
-	box.Opacity(0.35 + 0.65*box.Loop("pulse", 900*time.Millisecond, ui.Bounce(ui.EaseInOut)))
+	box := ui.Box(c).Size(6, 6).Radius(3).Background(theme.Live)
+	box.Opacity(0.4 + 0.6*box.Loop("pulse", 1200*time.Millisecond, ui.EaseInOut))
 }
 
 func sweep(c *ui.Context) {
-	ui.Box(c).Height(2).FillWidth().Background(theme.Well).Radius(1).Draw(func(p *ui.Painter, r ui.Rect) {
+	ui.Box(c).Height(2).FillWidth().Background(Wash(c, "plate")).Radius(1).Draw(func(p *ui.Painter, r ui.Rect) {
 		p.AnimationFrame()
 		period := 1200 * time.Millisecond
 		t := float32(p.Now().UnixNano()%int64(period)) / float32(period)
@@ -359,22 +510,24 @@ func sweep(c *ui.Context) {
 			w = r.W
 		}
 		x := r.X + (r.W-w)*t
-		p.Fill(ui.Rect{X: x, Y: r.Y, W: w, H: r.H}, theme.Ink, 1)
+		p.Fill(ui.Rect{X: x, Y: r.Y, W: w, H: r.H}, theme.Live, 1)
 	})
 }
 
-// CartridgeTile is a square format plate. A 2px bar appears only for on or fault.
+// CartridgeTile is a small format plate. A 2px bar appears only for a fault.
 func CartridgeTile(c *ui.Context, tag string, accent ui.Color, large bool) {
-	w, h := float32(28), float32(28)
+	w, h := float32(24), float32(24)
 	fontSize := float32(9)
+	radius := float32(4)
 	if large {
-		w, h = 40, 40
-		fontSize = 11
+		w, h = 32, 32
+		fontSize = 10
+		radius = 6
 	}
 	if len(tag) > 4 {
 		tag = tag[:4]
 	}
-	box := ui.Box(c).Size(w, h).Radius(theme.CardR).Background(theme.Well).Border(1, theme.BorderStrong).Center()
+	box := ui.Box(c).Size(w, h).Radius(radius).Background(Wash(c, "plate")).Border(1, Wash(c, "hairline")).Center()
 	if accent == theme.Trouble {
 		box.Draw(func(p *ui.Painter, r ui.Rect) {
 			p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W, H: 2}, accent, 0)
@@ -385,35 +538,28 @@ func CartridgeTile(c *ui.Context, tag string, accent ui.Color, large bool) {
 	})
 }
 
-// StyleSidebarRow marks the selected row with a fill and a 2px signal bar.
-func StyleSidebarRow(item ui.Element, on bool, _ ui.Color) {
-	item.Transition(ColorTransition)
-	if on {
-		item.Background(theme.Active)
-	} else if item.Hovered() {
-		item.Background(theme.Hover)
-	} else {
+// StyleSidebarRow marks the selected row with a deeper veil, hover with a lighter one.
+func StyleSidebarRow(c *ui.Context, item ui.Element, on bool, _ ui.Color) {
+	switch {
+	case on:
+		item.Background(Wash(c, "active"))
+	case item.Hovered():
+		item.Background(Wash(c, "hover"))
+	default:
 		item.Background(ui.Transparent)
-	}
-	if on {
-		item.DrawOver(func(p *ui.Painter, r ui.Rect) {
-			p.Fill(ui.Rect{X: r.X, Y: r.Y, W: 2, H: r.H}, theme.Live, 0)
-		})
 	}
 }
 
-// HeroEmblem is a square plate for an empty state. Not a reticle.
+// HeroEmblem is a quiet mark for an empty state. Not a boxed icon.
 func HeroEmblem(c *ui.Context, icon *ui.SVG, accent ui.Color) {
-	col := theme.Text
+	col := theme.Faint
 	if accent == theme.Live || accent == theme.Trouble {
 		col = accent
 	}
-	ui.Box(c).Size(36, 36).Radius(theme.CardR).Background(theme.Well).Border(1, theme.BorderStrong).Center().Children(func() {
-		ui.Icon(c, icon).Size(16, 16).TextColor(col)
-	})
+	ui.Icon(c, icon).Size(22, 22).TextColor(col)
 }
 
-// LatencyBar is a static proportion. Length is the data; color is only fault.
+// LatencyBar is a static proportion. Length is the data; color is accent or fault.
 func LatencyBar(c *ui.Context, d time.Duration, ok bool) {
 	ratio := float32(d.Milliseconds()) / 250.0
 	if ratio < 0.08 {
@@ -422,16 +568,16 @@ func LatencyBar(c *ui.Context, d time.Duration, ok bool) {
 	if ratio > 1 {
 		ratio = 1
 	}
-	barCol := theme.Ink
+	barCol := theme.Live
 	if !ok {
 		barCol = theme.Trouble
 	}
-	ui.Box(c).Size(36, 3).Background(theme.Well).Draw(func(p *ui.Painter, r ui.Rect) {
-		p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * ratio, H: r.H}, barCol, 0)
+	ui.Box(c).Size(36, 3).Radius(1).Background(Wash(c, "plate")).Draw(func(p *ui.Painter, r ui.Rect) {
+		p.Fill(ui.Rect{X: r.X, Y: r.Y, W: r.W * ratio, H: r.H}, barCol, 1)
 	})
 }
 
-// ConduitBridge is a hairline with an arrow. Active turns the arrow orange.
+// ConduitBridge is a hairline with an arrow. Active turns the arrow accent.
 func ConduitBridge(c *ui.Context, protocol string, active bool) {
 	col := theme.Faint
 	if active {
@@ -443,14 +589,14 @@ func ConduitBridge(c *ui.Context, protocol string, active bool) {
 		}
 		ui.Box(c).FillWidth().Height(8).Draw(func(p *ui.Painter, r ui.Rect) {
 			cy := r.Y + r.H/2
-			p.Line(r.X, cy, r.X+r.W-6, cy, 1, theme.BorderStrong)
+			p.Line(r.X, cy, r.X+r.W-6, cy, 1, Wash(c, "hairline"))
 			ax := r.X + r.W - 1
 			p.StrokePolyline([][2]float32{{ax - 4, cy - 3}, {ax, cy}, {ax - 4, cy + 3}}, 1, col)
 		})
 	})
 }
 
-// Stage is a square mark plus an ink label. The mark carries the state, not the words.
+// Stage is a circle mark plus an ink label. The mark carries the state, not the words.
 func Stage(c *ui.Context, tone, label string) {
 	filled := false
 	markCol := theme.Faint
@@ -473,13 +619,13 @@ func Stage(c *ui.Context, tone, label string) {
 
 // Join is the hairline between stages.
 func Join(c *ui.Context) {
-	ui.Box(c).Width(16).Height(1).Background(theme.BorderStrong)
+	ui.Box(c).Width(16).Height(1).Background(Wash(c, "hairline"))
 }
 
 // Kicker is a section label, with an optional count.
 func Kicker(c *ui.Context, title string, count ...int) {
 	ui.Row(c).Padding(0, 2).AlignItems(ui.Center).Children(func() {
-		ui.Text(c, title).FontSize(12).FontWeight(500).TextColor(theme.TextMuted)
+		ui.Text(c, title).FontSize(11).FontWeight(500).TextColor(theme.TextMuted)
 		if len(count) > 0 && count[0] > 0 {
 			ui.Spacer(c)
 			ui.Text(c, fmt.Sprintf("%d", count[0])).FontSize(11).Font(theme.FontMono).TextColor(theme.TextMuted)
@@ -487,9 +633,10 @@ func Kicker(c *ui.Context, title string, count ...int) {
 	})
 }
 
-// Status is the bottom strip: state mark, then the clock.
+// Status is the bottom band of the desk: state mark, then the clock.
 func Status(c *ui.Context, d *desk.Desk, label, tone string) {
-	ui.Row(c).Height(theme.StatusH).Padding(0, 22).BorderWidth(1, 0, 0, 0).BorderColor(theme.Border).Gap(10).AlignItems(ui.Center).Children(func() {
+	row := ui.Row(c).Height(theme.StatusH).Padding(0, 24).Background(Wash(c, "band")).BorderWidth(1, 0, 0, 0).BorderColor(Wash(c, "hairline")).Gap(8).AlignItems(ui.Center)
+	row.Children(func() {
 		if d.Notice != "" {
 			Stage(c, "bad", d.Notice)
 		} else {
@@ -502,25 +649,25 @@ func Status(c *ui.Context, d *desk.Desk, label, tone string) {
 
 // Line is a spec row: fixed label, monospace value.
 func Line(c *ui.Context, label, value string) {
-	ui.Row(c).MinHeight(36).Padding(0, 16).Gap(16).AlignItems(ui.Center).Children(func() {
+	ui.Row(c).MinHeight(32).Padding(0, 14).Gap(16).AlignItems(ui.Center).Children(func() {
 		ui.Text(c, label).FontSize(12).TextColor(theme.TextMuted).Width(84)
 		ui.Text(c, value).FontSize(12).Font(theme.FontMono).TextColor(theme.Text).Grow(1).SingleLine()
 	})
 }
 
 func mark(c *ui.Context, filled bool, col ui.Color) {
-	box := ui.Box(c).Size(6, 6)
+	box := ui.Box(c).Size(6, 6).Radius(3)
 	if filled {
 		box.Background(col)
 		return
 	}
-	box.Border(1, theme.BorderStrong)
+	box.Border(1, Wash(c, "hairline"))
 }
 
-// CallMark colors a finished call. Orange is reserved for something that is on.
+// CallMark colors a finished call. Accent is on. Fault is oxide.
 func CallMark(ok bool) ui.Color {
 	if ok {
-		return theme.Ink
+		return theme.Live
 	}
 	return theme.Trouble
 }

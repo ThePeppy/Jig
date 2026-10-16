@@ -30,8 +30,8 @@ func View(c *ui.Context, d *desk.Desk) {
 	pane := chrome.Pane(c).Grow(1)
 	pane.Children(func() {
 		// Unboxed editorial header
-		ui.Row(c).Padding(22, 28, 18, 28).BorderWidth(0, 0, 1, 0).BorderColor(theme.BorderSubtle).Gap(10).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, "调用审计记录").FontSize(18).FontWeight(500).TextColor(theme.Text)
+		ui.Row(c).Padding(16, 24, 12, 24).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).Gap(8).AlignItems(ui.Center).Children(func() {
+			ui.Text(c, "调用审计记录").FontSize(15).FontWeight(500).TextColor(theme.Text)
 			chrome.Stage(c, "done", fmt.Sprintf("%d 条记录", len(entries)))
 			if errCount > 0 {
 				chrome.Stage(c, "bad", fmt.Sprintf("%d 异常", errCount))
@@ -44,10 +44,10 @@ func View(c *ui.Context, d *desk.Desk) {
 			}
 		})
 
-		ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
+		ui.Scroll(c).Grow(1).Padding(16, 24).Gap(12).Children(func() {
 			// 3-Segment Horizontal Telemetry Readout Strip
 			chrome.Card(c).Children(func() {
-				ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
+				ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
 					chrome.ReadoutCell(c, "最新调用", latest.Function, latest.Target, theme.Run)
 					chrome.ReadoutCell(c, "最近耗时", latest.FormatDuration(), latest.Timestamp.Format("15:04:05"), theme.Live)
 					statusText := "全部正常返回"
@@ -85,7 +85,7 @@ func View(c *ui.Context, d *desk.Desk) {
 			// Chronological Call Sheet
 			ui.Column(c).Gap(8).Children(func() {
 				chrome.Kicker(c, "调用时间线", len(entries))
-				chrome.Card(c).Dividers(1, theme.BorderSubtle).Children(func() {
+				chrome.Card(c).Dividers(1, chrome.Wash(c, "rule")).Children(func() {
 					for _, e := range entries {
 						row(c, e)
 					}
@@ -104,10 +104,7 @@ func empty(c *ui.Context, d *desk.Desk) {
 			ui.Column(c).Width(480).AlignItems(ui.Center).Gap(16).Children(func() {
 				chrome.HeroEmblem(c, chrome.IconTrace, theme.Text)
 
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					ui.Text(c, "还没有调用").FontSize(18).FontWeight(500).TextColor(theme.Text)
-					chrome.Stage(c, "idle", "空")
-				})
+				ui.Text(c, "还没有调用").FontSize(15).FontWeight(500).TextColor(theme.Text)
 
 				ui.Text(c, "打开文件之后,Agent 的调用会落在这里。").
 					FontSize(13).
@@ -121,9 +118,9 @@ func empty(c *ui.Context, d *desk.Desk) {
 }
 
 func row(c *ui.Context, e internalTrace.Entry) {
-	item := ui.Row(c).MinHeight(40).Padding(0, 16).Gap(14).AlignItems(ui.Center)
+	item := ui.Row(c).MinHeight(36).Padding(0, 14).Gap(12).AlignItems(ui.Center)
 	if item.Hovered() {
-		item.Background(theme.CardHover)
+		item.Background(chrome.Wash(c, "hover"))
 	}
 
 	ok := e.Status != "error"
@@ -132,7 +129,7 @@ func row(c *ui.Context, e internalTrace.Entry) {
 		if !ok {
 			dot = theme.Trouble
 		}
-		ui.Box(c).Size(6, 6).Background(dot)
+		ui.Box(c).Size(6, 6).Radius(3).Background(dot)
 
 		ui.Text(c, e.Timestamp.Format("15:04:05")).FontSize(11).Font("SF Mono").TextColor(theme.Muted).Width(64)
 		ui.Text(c, e.Function).FontSize(12).FontWeight(500).Font(theme.FontMono).TextColor(theme.Text).Width(164).SingleLine()

@@ -17,8 +17,7 @@ import (
 func New(d *desk.Desk) func(*ui.Context) {
 	return func(c *ui.Context) {
 		c.SetTheme(theme.Jig())
-		ui.Column(c).Fill().Background(theme.Pane).Children(func() {
-			chrome.Title(c, d)
+		chrome.Shell(c, d, func() {
 			ui.Column(c).
 				Key(d.Tab).
 				Grow(1).
