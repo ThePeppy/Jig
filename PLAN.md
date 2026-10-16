@@ -1,8 +1,8 @@
 # Jig 原生应用计划
 
-新产品在 `app/`。Mygo 绘制窗口，进程内完成库、会话和调用记录。不再以 IDA Pro 窗口为产品对象，不再安装或管理 IDA GUI 插件。
+本目录是项目根。Mygo 绘制窗口，进程内完成库、会话和调用记录。不再以 IDA Pro 窗口为产品对象，不再安装或管理 IDA GUI 插件。
 
-`mcp-center` 的 Avalonia 桌面仍留在仓库里，直到本进程能监听 MCP、拉起 idalib worker，并完成一次真实打开。在那之前删掉它，会拆掉唯一还能跑的中心。替代验证通过后，桌面工程和 GUI 插件安装路径一起删除，不保留双入口。
+旧仓库 `supper-ida-mcp-tools` 里的 Avalonia 桌面仍是旧入口。Jig 已经能监听 MCP 并拉起 idalib worker。旧入口的删除不在本仓库里做。
 
 ## 已确认的缺陷
 
