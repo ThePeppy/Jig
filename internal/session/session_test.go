@@ -80,3 +80,38 @@ func TestShortSessionID(t *testing.T) {
 		}
 	}
 }
+
+func TestWorkerCandidatesPreferTheBundle(t *testing.T) {
+	exe := filepath.Join("/Applications", "Jig.app", "Contents", "MacOS", "Jig")
+	wd := filepath.Join("/work", "Jig")
+	got := workerCandidates(exe, wd)
+	want := filepath.Join("/Applications", "Jig.app", "Contents", "Resources", "jig-idalib")
+	if len(got) == 0 || got[0] != want {
+		t.Fatalf("first candidate %q, want %s", got, want)
+	}
+	repo := filepath.Join(wd, "native", "idalib-worker", "jig-idalib")
+	if !slicesContains(got, repo) {
+		t.Fatalf("checkout walk missing: %v", got)
+	}
+}
+
+func TestWorkerCandidatesWalkFromAPackageDir(t *testing.T) {
+	wd := filepath.Join("/work", "Jig", "internal", "session")
+	got := workerCandidates("/tmp/go-build123/b001/exe", wd)
+	want := filepath.Join("/work", "Jig", "native", "idalib-worker", "jig-idalib")
+	if !slicesContains(got, want) {
+		t.Fatalf("%v", got)
+	}
+	if bundleResources("/tmp/go-build123/b001/exe") != "" {
+		t.Fatal("a go test binary is not a bundle")
+	}
+}
+
+func slicesContains(ss []string, want string) bool {
+	for _, s := range ss {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}

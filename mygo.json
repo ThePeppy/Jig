@@ -2,5 +2,6 @@
   "name": "Jig",
   "identifier": "jig",
   "version": "0.1.0",
-  "out": "build"
+  "out": "build",
+  "resources": ["native/idalib-worker/jig-idalib"]
 }

@@ -4,6 +4,8 @@ IDA ?= /Applications/IDA Professional 9.3.app/Contents/MacOS
 SDK := ../../third_party/ida-sdk
 CXX ?= clang++
 
+# mygo build copies this binary into the app (mygo.json resources).
+
 jig-idalib: main.cpp tools.cpp json.hpp tools.hpp
 	$(CXX) -std=c++17 -O2 -D__EA64__ \
 		-I$(SDK)/src/include \

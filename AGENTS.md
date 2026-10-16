@@ -51,7 +51,7 @@
 
 `Desk.StartServers` 拉起两个回环监听。端口写死，不是设置项。`Listening` 为两者都成功。
 
-Worker 查找：`JIG_IDALIB_WORKER` 优先。否则从可执行文件目录和 cwd 各自起，含自身最多 5 层找 `native/idalib-worker/jig-idalib`，再在这两处旁边找 `jig-idalib`。启动参数：`--center-host` `--center-port` `--path` `--instance-id` `--ida-dir`。`IDADIR` 设为解析后的安装目录（`.app` 落到 `Contents/MacOS`）。
+Worker 查找：`JIG_IDALIB_WORKER` 优先。安装后的应用用 `Contents/Resources/jig-idalib`（`mygo.json` 的 `resources` 打进包，签名跟着应用走）。否则从可执行文件目录和 cwd 各自起，含自身最多 5 层找 `native/idalib-worker/jig-idalib`，再在这两处旁边找 `jig-idalib`。启动参数：`--center-host` `--center-port` `--path` `--instance-id` `--ida-dir`。`IDADIR` 设为解析后的安装目录（`.app` 落到 `Contents/MacOS`）。
 
 帧：4 字节大端长度 + JSON，上限 64MiB。类型：`hello`、`tool_call`、`tool_result`、`shutdown`。worker 先打开数据库再连 hub，`hello` 带 `target.get_metadata`。`shutdown` 或连接断开后必须 `save_database(..., DBFL_KILL)` 把摊开的 `.id0/.id1/.id2/.nam/.til` 收回 `.i64` 再退出。不要 `Kill`：SIGKILL 会把库留在摊开状态。
 

@@ -484,32 +484,55 @@ func workerBinary() (string, error) {
 		}
 		return "", fmt.Errorf("JIG_IDALIB_WORKER 不存在: %s", p)
 	}
+	exe, _ := os.Executable()
+	if real, err := filepath.EvalSymlinks(exe); err == nil {
+		exe = real
+	}
+	wd, _ := os.Getwd()
+	for _, c := range workerCandidates(exe, wd) {
+		if st, err := os.Stat(c); err == nil && !st.IsDir() {
+			return c, nil
+		}
+	}
+	return "", fmt.Errorf("没有找到原生 worker jig-idalib")
+}
+
+// workerCandidates is where a packaged app and a repo checkout keep the
+// worker. The bundle copy wins, so an installed app does not pick up a
+// checkout that happens to be the working directory.
+func workerCandidates(exe, wd string) []string {
+	var out []string
+	if res := bundleResources(exe); res != "" {
+		out = append(out, filepath.Join(res, "jig-idalib"))
+	}
 	var roots []string
-	if exe, err := os.Executable(); err == nil {
+	if exe != "" {
 		roots = append(roots, filepath.Dir(exe))
 	}
-	if wd, err := os.Getwd(); err == nil {
+	if wd != "" && (len(roots) == 0 || wd != roots[0]) {
 		roots = append(roots, wd)
 	}
 	for _, root := range roots {
 		dir := root
 		for range 5 {
-			candidate := filepath.Join(dir, "native", "idalib-worker", "jig-idalib")
-			if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
-				return candidate, nil
-			}
+			out = append(out, filepath.Join(dir, "native", "idalib-worker", "jig-idalib"))
 			next := filepath.Dir(dir)
 			if next == dir {
 				break
 			}
 			dir = next
 		}
-		beside := filepath.Join(root, "jig-idalib")
-		if st, err := os.Stat(beside); err == nil && !st.IsDir() {
-			return beside, nil
-		}
+		out = append(out, filepath.Join(root, "jig-idalib"))
 	}
-	return "", fmt.Errorf("没有找到原生 worker jig-idalib")
+	return out
+}
+
+func bundleResources(exe string) string {
+	dir := filepath.Dir(exe)
+	if exe != "" && filepath.Base(dir) == "MacOS" && filepath.Base(filepath.Dir(dir)) == "Contents" {
+		return filepath.Join(filepath.Dir(dir), "Resources")
+	}
+	return ""
 }
 
 // Close asks the worker to pack the database and exit. It does not kill the
