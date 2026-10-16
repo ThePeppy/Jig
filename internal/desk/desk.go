@@ -9,12 +9,12 @@ import (
 	"path/filepath"
 	"time"
 
-	"app/internal/catalog"
-	"app/internal/idalib"
-	"app/internal/intake"
-	"app/internal/mcp"
-	"app/internal/session"
-	"app/internal/trace"
+	"jig/internal/catalog"
+	"jig/internal/idalib"
+	"jig/internal/intake"
+	"jig/internal/mcp"
+	"jig/internal/session"
+	"jig/internal/trace"
 )
 
 // Tab is the window's current page.

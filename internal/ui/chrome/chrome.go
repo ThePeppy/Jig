@@ -8,8 +8,8 @@ import (
 	"github.com/egoist/mygo/plugins/glass"
 	"github.com/egoist/mygo/ui"
 
-	"app/internal/desk"
-	"app/internal/ui/theme"
+	"jig/internal/desk"
+	"jig/internal/ui/theme"
 )
 
 var (

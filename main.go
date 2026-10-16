@@ -6,10 +6,10 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"app/internal/desk"
-	"app/internal/product"
-	"app/internal/ui/appview"
-	"app/internal/ui/theme"
+	"jig/internal/desk"
+	"jig/internal/product"
+	"jig/internal/ui/appview"
+	"jig/internal/ui/theme"
 )
 
 func main() {

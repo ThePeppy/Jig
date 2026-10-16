@@ -9,12 +9,12 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"app/internal/catalog"
-	"app/internal/desk"
-	"app/internal/intake"
-	"app/internal/product"
-	"app/internal/ui/chrome"
-	"app/internal/ui/theme"
+	"jig/internal/catalog"
+	"jig/internal/desk"
+	"jig/internal/intake"
+	"jig/internal/product"
+	"jig/internal/ui/chrome"
+	"jig/internal/ui/theme"
 )
 
 // View renders the binary & database library or the centered empty state.

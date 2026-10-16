@@ -7,11 +7,11 @@ import (
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 
-	"app/internal/desk"
-	"app/internal/idalib"
-	"app/internal/product"
-	"app/internal/ui/chrome"
-	"app/internal/ui/theme"
+	"jig/internal/desk"
+	"jig/internal/idalib"
+	"jig/internal/product"
+	"jig/internal/ui/chrome"
+	"jig/internal/ui/theme"
 )
 
 // View draws the settings groups.

@@ -10,9 +10,9 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"app/internal/desk"
-	"app/internal/session"
-	"app/internal/trace"
+	"jig/internal/desk"
+	"jig/internal/session"
+	"jig/internal/trace"
 )
 
 func TestWindowShowsLibraryThenOtherPages(t *testing.T) {

@@ -5,10 +5,10 @@ import (
 
 	"github.com/egoist/mygo/ui"
 
-	"app/internal/desk"
-	internalTrace "app/internal/trace"
-	"app/internal/ui/chrome"
-	"app/internal/ui/theme"
+	"jig/internal/desk"
+	internalTrace "jig/internal/trace"
+	"jig/internal/ui/chrome"
+	"jig/internal/ui/theme"
 )
 
 // View renders the agent call audit view.

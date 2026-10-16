@@ -10,9 +10,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"app/internal/intake"
-	"app/internal/session"
-	"app/internal/trace"
+	"jig/internal/intake"
+	"jig/internal/session"
+	"jig/internal/trace"
 )
 
 // Server serves /mcp and /health over HTTP.

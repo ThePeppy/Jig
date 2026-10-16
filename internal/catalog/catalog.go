@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"app/internal/intake"
+	"jig/internal/intake"
 )
 
 // Entry is one file the user kept. Path is what idalib will open. Source

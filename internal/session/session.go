@@ -17,7 +17,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"app/internal/idalib"
+	"jig/internal/idalib"
 )
 
 // State describes the lifecycle stage of a worker session.

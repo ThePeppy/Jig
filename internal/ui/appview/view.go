@@ -4,14 +4,14 @@ package appview
 import (
 	"time"
 
-	"app/internal/desk"
-	"app/internal/ui/chrome"
-	"app/internal/ui/library"
-	"app/internal/ui/sessions"
-	"app/internal/ui/settings"
-	"app/internal/ui/theme"
-	"app/internal/ui/trace"
 	"github.com/egoist/mygo/ui"
+	"jig/internal/desk"
+	"jig/internal/ui/chrome"
+	"jig/internal/ui/library"
+	"jig/internal/ui/sessions"
+	"jig/internal/ui/settings"
+	"jig/internal/ui/theme"
+	"jig/internal/ui/trace"
 )
 
 // New returns the view Mygo draws for d.
