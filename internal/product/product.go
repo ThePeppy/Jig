@@ -1,4 +1,5 @@
 // Package product is the stable identity of the native app.
+// DrawMark is the Dock icon and the menu-bar template. It does not read a file.
 package product
 
 import (

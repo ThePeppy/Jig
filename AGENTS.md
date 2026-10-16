@@ -17,7 +17,7 @@
 | 路径 | 职责 |
 | --- | --- |
 | `main.go` | 窗口、`Take`、选 IDA 目录。对话框在 goroutine，结果经 `Window.Update` 回主线程。 |
-| `internal/product` | 名称 `Jig`，数据目录 `~/.jig`，路径缩写成 `~`。 |
+| `internal/product` | 名称 `Jig`，数据目录 `~/.jig`，路径缩写成 `~`。棱柱标在 `DrawMark`。 |
 | `internal/intake` | 路径能不能入库。无 UI，无磁盘。 |
 | `internal/catalog` | 内存库。`Path` 是 idalib 要打开的路径，`Source` 是用户选的文件，`Name` 永远是用户看到的文件名。 |
 | `internal/desk` | 窗口状态。只把库条目和 `idaDir` 写入 `~/.jig/state.json`。会话和记录不落盘。 |
