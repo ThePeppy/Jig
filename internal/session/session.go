@@ -49,6 +49,7 @@ type Session struct {
 	conn   net.Conn
 	writeM sync.Mutex
 	mu     sync.Mutex
+	exited chan struct{}
 }
 
 // Elapsed returns how long the session has been active.
@@ -375,6 +376,7 @@ func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, 
 		State:        StateLaunching,
 		StartedAt:    time.Now(),
 		cmd:          cmd,
+		exited:       make(chan struct{}),
 	}
 	m.Register(s)
 	if err := cmd.Start(); err != nil {
@@ -385,15 +387,21 @@ func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, 
 	s.PID = cmd.Process.Pid
 	s.mu.Unlock()
 
-	exited := make(chan struct{})
+	exited := s.exited
 	go func() {
 		waitErr := cmd.Wait()
 		s.mu.Lock()
-		if s.State == StateLaunching || s.State == StateReady {
+		switch s.State {
+		case StateLaunching, StateReady:
 			s.State = StateError
 			if waitErr != nil {
 				s.Error = waitErr.Error()
 			}
+		case StateStopping:
+			if waitErr != nil && s.Error == "" {
+				s.Error = waitErr.Error()
+			}
+			s.State = StateClosed
 		}
 		s.mu.Unlock()
 		close(exited)
@@ -474,7 +482,9 @@ func workerBinary() (string, error) {
 	return "", fmt.Errorf("没有找到原生 worker jig-idalib")
 }
 
-// Close gracefully terminates a worker session.
+// Close asks the worker to pack the database and exit. It does not kill the
+// process: SIGKILL leaves the .i64 unpacked. The session stays Stopping until
+// the process actually exits.
 func (m *Manager) Close(id string) error {
 	m.mu.Lock()
 	s, ok := m.sessions[id]
@@ -487,8 +497,7 @@ func (m *Manager) Close(id string) error {
 	s.State = StateStopping
 	conn := s.conn
 	s.conn = nil
-	cancel := s.cancel
-	cmd := s.cmd
+	exited := s.exited
 	s.mu.Unlock()
 
 	if conn != nil {
@@ -497,16 +506,21 @@ func (m *Manager) Close(id string) error {
 		s.writeM.Unlock()
 		_ = conn.Close()
 	}
-	if cancel != nil {
-		cancel()
+	if exited == nil {
+		s.mu.Lock()
+		s.State = StateClosed
+		s.mu.Unlock()
+	} else {
+		select {
+		case <-exited:
+			s.mu.Lock()
+			if s.State == StateStopping || s.State == StateError {
+				s.State = StateClosed
+			}
+			s.mu.Unlock()
+		default:
+		}
 	}
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-	}
-
-	s.mu.Lock()
-	s.State = StateClosed
-	s.mu.Unlock()
 	m.notify()
 	return nil
 }

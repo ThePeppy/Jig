@@ -203,7 +203,7 @@ func (d *Desk) CloseSession(id string) error {
 	err := d.Sessions.Close(id)
 	dur := time.Since(start)
 	status := "ok"
-	summary := "会话已正常关闭"
+	summary := "正在收拢数据库"
 	if err != nil {
 		status = "error"
 		summary = "关闭异常: " + err.Error()

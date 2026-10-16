@@ -16,6 +16,7 @@
 #include <strlist.hpp>
 #include <ua.hpp>
 #include <xref.hpp>
+#include <iostream>
 
 #include <algorithm>
 #include <cctype>
@@ -819,11 +820,21 @@ bool open_database(const std::string &path, std::string &error) {
 
 void close_database() {
   if (!g_open) return;
-  if (g_hexrays) term_hexrays_plugin();
+  if (g_hexrays) {
+    term_hexrays_plugin();
+    g_hexrays = false;
+  }
+  // Open leaves .id0/.id1/.id2/.nam/.til beside the .i64. Pack them back
+  // and delete the spread files. IDA's default PACK_DATABASE is store.
+  if (inf_get_pack_mode() == IDB_UNPACKED) inf_set_pack_mode(IDB_PACKED);
+  set_database_flag(DBFL_KILL, true);
+  const char *path = get_path(PATH_TYPE_IDB);
+  if (!save_database(path != nullptr && path[0] ? path : nullptr, DBFL_KILL)) {
+    std::cerr << "[jig-idalib] save_database failed; unpacked components may remain\n";
+  }
   ::close_database(false);
   g_open = false;
   g_pump = false;
-  g_hexrays = false;
 }
 
 int pump_auto_steps(int max_steps) {
