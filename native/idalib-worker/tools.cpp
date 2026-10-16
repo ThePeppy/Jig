@@ -2,13 +2,14 @@
 
 #include <idalib.hpp>
 #include <auto.hpp>
+#include <err.h>
 #include <bytes.hpp>
 #include <funcs.hpp>
 #include <hexrays.hpp>
 #include <idp.hpp>
 #include <kernwin.hpp>
 #include <lines.hpp>
-#include <loader.hpp>
+#include <diskio.hpp>
 #include <nalt.hpp>
 #include <name.hpp>
 #include <segment.hpp>
@@ -177,26 +178,62 @@ std::string alias_from_name(const std::string &name) {
   return out.empty() ? "ida" : out;
 }
 
-bool is_ida_database(const std::filesystem::path &path) {
-  std::string ext = lower_copy(path.extension().string());
-  return ext == ".i64" || ext == ".idb";
+std::string file_ext(const std::string &path) {
+  std::string ext = lower_copy(std::filesystem::path(path).extension().string());
+  if (!ext.empty() && ext.front() == '.') ext.erase(ext.begin());
+  return ext;
 }
 
-std::string resolve_open_path(const std::string &raw) {
-  std::filesystem::path path(raw);
-  if (is_ida_database(path)) return path.string();
-  std::filesystem::path dir = path.parent_path();
-  std::string stem = path.stem().string();
-  std::vector<std::filesystem::path> candidates;
-  for (const char *ext : {".i64", ".idb"}) {
-    candidates.push_back(dir.empty() ? std::filesystem::path(stem + ext) : dir / (stem + ext));
-    candidates.push_back(std::filesystem::path(path.string() + ext));
+// Ask the installed loaders. An empty list means none accepted the file.
+// Database extensions are not loader inputs; open_database handles those.
+std::string loaders_or_error(const std::string &path) {
+  std::string ext = file_ext(path);
+  if (!ext.empty() && is_database_ext(ext.c_str())) return "";
+  linput_t *li = open_linput(path.c_str(), false);
+  if (li == nullptr) {
+    const char *why = qstrerror(get_qerrno());
+    if (why != nullptr && why[0] != 0) return std::string("打不开这个文件: ") + why;
+    return "打不开这个文件";
   }
-  for (const auto &candidate : candidates) {
-    std::error_code ec;
-    if (std::filesystem::is_regular_file(candidate, ec)) return candidate.string();
+  load_info_t *list = build_loaders_list(li, path.c_str());
+  close_linput(li);
+  if (list == nullptr) return "没有装载器接受这个文件";
+  free_loaders_list(list);
+  return "";
+}
+struct msg_sink : event_listener_t {
+  std::string text;
+  ssize_t idaapi on_event(ssize_t code, va_list va) override {
+    if (code != ui_msg) return 0;
+    const char *fmt = va_arg(va, const char *);
+    if (fmt == nullptr || fmt[0] == 0) return 0;
+    va_list incoming = va_arg(va, va_list);
+    va_list args;
+    va_copy(args, incoming);
+    qstring line;
+    line.vsprnt(fmt, args);
+    va_end(args);
+    if (line.empty()) return 0;
+    if (!text.empty() && text.back() != '\n') text.push_back('\n');
+    text += line.c_str();
+    return 0;
   }
-  return path.string();
+};
+
+std::string trim_copy(std::string text) {
+  while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' ')) text.pop_back();
+  return text;
+}
+
+std::string output_lines() {
+  qstrvec_t lines;
+  msg_get_lines(&lines, -1);
+  std::string text;
+  for (ssize_t i = static_cast<ssize_t>(lines.size()) - 1; i >= 0; --i) {
+    if (!text.empty() && text.back() != '\n') text.push_back('\n');
+    text += lines[i].c_str();
+  }
+  return trim_copy(text);
 }
 
 Json function_row(func_t *func) {
@@ -755,10 +792,23 @@ bool open_database(const std::string &path, std::string &error) {
     return false;
   }
   enable_console_messages(false);
-  std::string open_path = resolve_open_path(path);
-  int code = ::open_database(open_path.c_str(), false, "-A");
+  msg_clear();
+  msg_sink sink;
+  hook_event_listener(HT_UI, &sink, nullptr, HKCB_GLOBAL);
+  std::string rejected = loaders_or_error(path);
+  if (!rejected.empty()) {
+    unhook_event_listener(HT_UI, &sink);
+    error = rejected;
+    return false;
+  }
+  int code = ::open_database(path.c_str(), false, "-A");
+  std::string why = trim_copy(sink.text);
+  if (why.empty()) why = output_lines();
+  unhook_event_listener(HT_UI, &sink);
   if (code != 0) {
-    error = "open_database failed for " + open_path + " (code=" + std::to_string(code) + ")";
+    if (why.empty()) why = "open_database 失败 (code=" + std::to_string(code) + ")";
+    else why += " (code=" + std::to_string(code) + ")";
+    error = why;
     return false;
   }
   g_open = true;

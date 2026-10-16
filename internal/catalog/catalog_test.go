@@ -14,7 +14,7 @@ func TestAddKeepsAnyFileAndDedupes(t *testing.T) {
 	}
 	c := New()
 	first, added, err := c.Add(bin)
-	if err != nil || !added || first.Kind != "file" {
+	if err != nil || !added || first.Path != bin || first.Name != "firmware" {
 		t.Fatalf("added=%v err=%v entry=%+v", added, err, first)
 	}
 	again, added, err := c.Add(bin)

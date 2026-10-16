@@ -171,7 +171,7 @@ func TestRenderAllStudioScreens(t *testing.T) {
 	// 1. Empty Library
 	savePNG("jig_ui_1_lib_empty.png", view)
 
-	// 2. Populated Library (Companion DB + Raw Binary + Missing File)
+	// 2. Populated library, two live sessions, one missing file.
 	dir := t.TempDir()
 	bin1 := filepath.Join(dir, "libil2cpp-arm64.so")
 	db1 := filepath.Join(dir, "libil2cpp-arm64.i64")
@@ -216,7 +216,7 @@ func TestRenderAllStudioScreens(t *testing.T) {
 		Target:    "libil2cpp-arm64.so",
 		Duration:  420 * time.Millisecond,
 		Status:    "ok",
-		Summary:   "Worker 已就绪 (PID: 48210) · 伴随数据库直通装载",
+		Summary:   "Worker 已就绪 (PID: 48210)",
 	})
 	d.Traces.Append(trace.Entry{
 		Timestamp: time.Date(2026, 10, 16, 14, 27, 4, 0, time.Local),

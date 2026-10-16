@@ -11,7 +11,6 @@ import (
 
 	"jig/internal/catalog"
 	"jig/internal/desk"
-	"jig/internal/intake"
 	"jig/internal/product"
 	"jig/internal/ui/chrome"
 	"jig/internal/ui/theme"
@@ -162,13 +161,11 @@ func row(c *ui.Context, d *desk.Desk, e catalog.Entry, on bool) {
 					chrome.Stage(c, "bad", "文件缺失")
 				} else if hasSession {
 					chrome.Stage(c, "live", "已打开")
-				} else if e.Companion {
-					ui.Text(c, "+db").FontSize(10).Font(theme.FontMono).TextColor(theme.Muted)
 				}
 			})
 
 			ui.Row(c).AlignItems(ui.Center).Gap(5).Children(func() {
-				ui.Text(c, kindLabel(e)).FontSize(11).TextColor(theme.Muted)
+				ui.Text(c, "文件").FontSize(11).TextColor(theme.Muted)
 				ui.Text(c, "·").FontSize(11).TextColor(theme.Muted)
 				ui.Text(c, product.ShortPath(filepath.Dir(e.Source))).FontSize(11).Font("SF Mono").TextColor(theme.Muted).Grow(1).SingleLine()
 			})
@@ -257,7 +254,7 @@ func detail(c *ui.Context, d *desk.Desk) {
 				// 3-Segment Horizontal Instrument Readout Strip (Type, Size, Pipeline Stage)
 				chrome.Card(c).Children(func() {
 					ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
-						chrome.ReadoutCell(c, "类型", kindLabel(e), "按内容加载，不限扩展名", accent)
+						chrome.ReadoutCell(c, "类型", "文件", "装载与报错由 idalib 决定", accent)
 						chrome.ReadoutCell(c, "大小", formatFileSize(e.Path), filepath.Base(e.Path), theme.Run)
 
 						// Pipeline cell
@@ -277,34 +274,18 @@ func detail(c *ui.Context, d *desk.Desk) {
 									chrome.Stage(c, "idle", "打开")
 								}
 							})
-							if e.Companion {
-								ui.Text(c, "旁边已有数据库,打开时用它,不再灌入原文件。").FontSize(11).TextColor(theme.TextMuted).SingleLine()
-							} else {
-								ui.Text(c, "无界面模式 · 按需建函数").FontSize(11).TextColor(theme.Muted).SingleLine()
-							}
+							ui.Text(c, "打开时询问装载器，失败带回 idalib 的错误。").FontSize(11).TextColor(theme.TextMuted).SingleLine()
 						})
 					})
 				})
 
-				// Dual-Slot Side-by-Side Path Routing Module (Source ──▸ Open Target)
-				bridgeLabel := "直接打开"
-				if e.Companion {
-					bridgeLabel = "伴随库直通"
-				}
-				openBadge := "待命"
+				openBadge := "未打开"
 				openTone := "idle"
 				if hasSession {
 					openBadge = "已挂载"
 					openTone = "live"
-				} else if e.Companion {
-					openBadge = "+db"
-					openTone = "run"
 				}
-				ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-					chrome.PathSlotCard(c, "来源", filepath.Base(e.Source), product.ShortPath(e.Source), "原始文件", "done")
-					chrome.ConduitBridge(c, bridgeLabel, hasSession || e.Companion)
-					chrome.PathSlotCard(c, "打开", filepath.Base(e.Path), product.ShortPath(e.Path), openBadge, openTone)
-				})
+				chrome.PathSlotCard(c, "路径", e.Name, product.ShortPath(e.Path), openBadge, openTone)
 
 				// Chronological call log for this target (or harmonious slate standby card)
 				type callRow struct {
@@ -401,16 +382,6 @@ func formatFileSize(path string) string {
 	default:
 		return fmt.Sprintf("%d B · %s 文件", sz, ext)
 	}
-}
-
-func kindLabel(e catalog.Entry) string {
-	if e.Kind == intake.KindDatabase {
-		if e.Companion {
-			return "伴随数据库"
-		}
-		return "数据库"
-	}
-	return "文件"
 }
 
 func idaLine(d *desk.Desk) string {

@@ -9,16 +9,14 @@ import (
 	"jig/internal/intake"
 )
 
-// Entry is one file the user kept. Path is what idalib will open. Source
-// is what the user picked; they differ when a companion database exists.
+// Entry is one file the user kept. Path is that file. idalib decides
+// whether to open an existing database or create one.
 type Entry struct {
-	ID        string    `json:"id"`
-	Source    string    `json:"source"`
-	Path      string    `json:"path"`
-	Name      string    `json:"name"`
-	Kind      string    `json:"kind"`
-	Companion bool      `json:"companion"`
-	Added     time.Time `json:"added"`
+	ID     string    `json:"id"`
+	Source string    `json:"source"`
+	Path   string    `json:"path"`
+	Name   string    `json:"name"`
+	Added  time.Time `json:"added"`
 }
 
 // Missing reports that the open path is gone.
@@ -113,13 +111,11 @@ func (c *Catalog) Add(path string) (Entry, bool, error) {
 		}
 	}
 	e := Entry{
-		ID:        c.nextID(),
-		Source:    decision.Source,
-		Path:      decision.OpenPath,
-		Name:      decision.Name,
-		Kind:      decision.Kind,
-		Companion: decision.Companion,
-		Added:     c.now(),
+		ID:     c.nextID(),
+		Source: decision.Source,
+		Path:   decision.OpenPath,
+		Name:   decision.Name,
+		Added:  c.now(),
 	}
 	c.entries = append(c.entries, e)
 	c.selected = e.ID

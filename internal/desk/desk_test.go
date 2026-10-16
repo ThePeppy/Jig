@@ -55,10 +55,10 @@ func TestAddPathSelectsLibrary(t *testing.T) {
 	if err := os.WriteFile(sidecar, []byte{1}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := d.AddPath(sidecar); err == nil {
-		t.Fatal("sidecar accepted")
+	if err := d.AddPath(sidecar); err != nil {
+		t.Fatal(err)
 	}
-	if d.Notice == "" {
-		t.Fatal("missing notice")
+	if len(d.Catalog.Entries()) != 2 {
+		t.Fatalf("entries %d", len(d.Catalog.Entries()))
 	}
 }
