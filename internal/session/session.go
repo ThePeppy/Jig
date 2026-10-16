@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -83,6 +84,7 @@ type Manager struct {
 	pending  map[string]*pendingCall
 	reqSeq   atomic.Uint64
 	ln       net.Listener
+	hubAddr  string
 	hubPort  int
 	OnChange func()
 }
@@ -106,6 +108,13 @@ func (m *Manager) StartHub(addr string) error {
 	m.ln = ln
 	if tcpAddr, ok := ln.Addr().(*net.TCPAddr); ok {
 		m.hubPort = tcpAddr.Port
+		host, _, err := net.SplitHostPort(addr)
+		if err != nil || host == "" {
+			host = "127.0.0.1"
+		}
+		m.hubAddr = net.JoinHostPort(host, strconv.Itoa(tcpAddr.Port))
+	} else {
+		m.hubAddr = addr
 	}
 	m.mu.Unlock()
 
@@ -316,117 +325,153 @@ func (m *Manager) Register(s *Session) {
 	m.order = append(m.order, s.ID)
 }
 
-// Launch starts a new headless worker session for openPath.
-func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, idaDir, pythonPath string) (*Session, error) {
+// Launch starts one native idalib worker for openPath. The worker links the
+// installed libidalib and loads Hex-Rays itself. This process does not start Python.
+func (m *Manager) Launch(ctx context.Context, targetName, sourcePath, openPath, idaDir string) (*Session, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if openPath == "" {
 		return nil, fmt.Errorf("target path is required")
 	}
 	if existing, ok := m.FindByPath(openPath); ok {
 		return existing, nil
 	}
-
+	label := targetName
+	if label == "" {
+		label = filepath.Base(sourcePath)
+	}
+	if label == "" || label == "." {
+		label = filepath.Base(openPath)
+	}
+	if idalib.LibraryFile(idaDir) == "" {
+		return nil, fmt.Errorf("无法打开 %s：没有找到 libidalib", label)
+	}
+	bin, err := workerBinary()
+	if err != nil {
+		return nil, fmt.Errorf("无法打开 %s：%w", label, err)
+	}
 	m.mu.Lock()
-	id := fmt.Sprintf("s-%x", time.Now().UnixNano()%0xffffff)
-	port := m.hubPort
-	if port == 0 {
-		port = 9399
-	}
+	hub := m.hubAddr
 	m.mu.Unlock()
-
-	if idaDir != "" {
-		_ = idalib.EnsureUserConfig(idaDir)
+	if hub == "" {
+		return nil, fmt.Errorf("无法打开 %s：worker hub 没有在监听", label)
 	}
-	resolvedIdaDir := idalib.ResolveInstallDir(idaDir)
-	idalibPyDir := idalib.IdalibPythonDir(idaDir)
-
+	host, port, err := net.SplitHostPort(hub)
+	if err != nil {
+		return nil, fmt.Errorf("无法打开 %s：%w", label, err)
+	}
+	install := idalib.ResolveInstallDir(idaDir)
+	id := fmt.Sprintf("jig-%d", time.Now().UnixNano())
+	cmd := exec.Command(bin, "--center-host", host, "--center-port", port, "--path", openPath, "--instance-id", id, "--ida-dir", install)
+	cmd.Env = append(os.Environ(), "IDADIR="+install)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	s := &Session{
 		ID:           id,
-		TargetName:   targetName,
+		TargetName:   label,
 		SourcePath:   sourcePath,
 		DatabasePath: openPath,
 		State:        StateLaunching,
 		StartedAt:    time.Now(),
+		cmd:          cmd,
 	}
-
-	if pythonPath == "" {
-		pythonPath = "python3"
-	}
-
-	repoRoot := findRepoRoot()
-	workerDir := filepath.Join(repoRoot, "idalib-worker", "src")
-	pluginDir := filepath.Join(repoRoot, "ida-plugin", "src")
-
-	cctx, cancel := context.WithCancel(context.Background())
-	s.cancel = cancel
-
-	cmd := exec.CommandContext(cctx, pythonPath, "-m", "supper_idalib_worker",
-		"--center-host", "127.0.0.1",
-		"--center-port", fmt.Sprintf("%d", port),
-		"--path", openPath,
-		"--instance-id", id,
-	)
-
-	var pyPaths []string
-	if idalibPyDir != "" {
-		pyPaths = append(pyPaths, idalibPyDir)
-	}
-	pyPaths = append(pyPaths, workerDir, pluginDir)
-	if existing := os.Getenv("PYTHONPATH"); existing != "" {
-		pyPaths = append(pyPaths, existing)
-	}
-
-	env := os.Environ()
-	env = append(env, "PYTHONPATH="+strings.Join(pyPaths, string(filepath.ListSeparator)), "PYTHONUNBUFFERED=1")
-	if resolvedIdaDir != "" {
-		env = append(env, "IDADIR="+resolvedIdaDir, "IDA_PATH="+resolvedIdaDir)
-	}
-	cmd.Env = env
-
-	var stderrBuf bytes.Buffer
-	cmd.Stderr = &stderrBuf
-
-	s.cmd = cmd
+	m.Register(s)
 	if err := cmd.Start(); err != nil {
-		cancel()
-		s.State = StateError
-		s.Error = err.Error()
-		m.mu.Lock()
-		m.sessions[id] = s
-		m.order = append(m.order, id)
-		m.mu.Unlock()
-		return s, err
+		m.failLaunch(s, err.Error())
+		return nil, fmt.Errorf("无法打开 %s：%w", label, err)
 	}
-
+	s.mu.Lock()
 	s.PID = cmd.Process.Pid
-	s.State = StateReady
-	m.mu.Lock()
-	m.sessions[id] = s
-	m.order = append(m.order, id)
-	m.mu.Unlock()
-	m.notify()
+	s.mu.Unlock()
 
+	exited := make(chan struct{})
 	go func() {
-		err := cmd.Wait()
+		waitErr := cmd.Wait()
 		s.mu.Lock()
-		if s.State != StateClosed && s.State != StateStopping {
-			if err != nil {
-				s.State = StateClosed
-				errText := strings.TrimSpace(stderrBuf.String())
-				if errText != "" {
-					lines := strings.Split(errText, "\n")
-					s.Error = lines[len(lines)-1]
-				} else {
-					s.Error = err.Error()
-				}
-			} else {
-				s.State = StateClosed
+		if s.State == StateLaunching || s.State == StateReady {
+			s.State = StateError
+			if waitErr != nil {
+				s.Error = waitErr.Error()
 			}
 		}
 		s.mu.Unlock()
+		close(exited)
 		m.notify()
 	}()
 
-	return s, nil
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		s.mu.Lock()
+		ready := s.State == StateReady && s.conn != nil
+		failed := s.State == StateError
+		s.mu.Unlock()
+		if ready {
+			return s, nil
+		}
+		if failed {
+			msg := strings.TrimSpace(stderr.String())
+			if msg == "" {
+				msg = "worker 退出"
+			}
+			m.failLaunch(s, msg)
+			return nil, fmt.Errorf("无法打开 %s：%s", label, msg)
+		}
+		select {
+		case <-ctx.Done():
+			if cmd.Process != nil {
+				_ = cmd.Process.Kill()
+			}
+			m.failLaunch(s, ctx.Err().Error())
+			return nil, ctx.Err()
+		case <-exited:
+		case <-ticker.C:
+		}
+	}
+}
+
+func (m *Manager) failLaunch(s *Session, msg string) {
+	s.mu.Lock()
+	s.State = StateClosed
+	s.Error = msg
+	s.mu.Unlock()
+	m.notify()
+}
+
+func workerBinary() (string, error) {
+	if p := os.Getenv("JIG_IDALIB_WORKER"); p != "" {
+		if st, err := os.Stat(p); err == nil && !st.IsDir() {
+			return p, nil
+		}
+		return "", fmt.Errorf("JIG_IDALIB_WORKER 不存在: %s", p)
+	}
+	var roots []string
+	if exe, err := os.Executable(); err == nil {
+		roots = append(roots, filepath.Dir(exe))
+	}
+	if wd, err := os.Getwd(); err == nil {
+		roots = append(roots, wd)
+	}
+	for _, root := range roots {
+		dir := root
+		for range 5 {
+			candidate := filepath.Join(dir, "native", "idalib-worker", "jig-idalib")
+			if st, err := os.Stat(candidate); err == nil && !st.IsDir() {
+				return candidate, nil
+			}
+			next := filepath.Dir(dir)
+			if next == dir {
+				break
+			}
+			dir = next
+		}
+		beside := filepath.Join(root, "jig-idalib")
+		if st, err := os.Stat(beside); err == nil && !st.IsDir() {
+			return beside, nil
+		}
+	}
+	return "", fmt.Errorf("没有找到原生 worker jig-idalib")
 }
 
 // Close gracefully terminates a worker session.
@@ -520,17 +565,4 @@ func boolField(m map[string]any, key string) bool {
 	}
 	v, _ := m[key].(bool)
 	return v
-}
-
-func findRepoRoot() string {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "."
-	}
-	for dir := wd; dir != "" && dir != "/"; dir = filepath.Dir(dir) {
-		if _, err := os.Stat(filepath.Join(dir, "idalib-worker")); err == nil {
-			return dir
-		}
-	}
-	return "."
 }

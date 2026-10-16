@@ -127,21 +127,21 @@ func ida(c *ui.Context, d *desk.Desk) {
 			})
 		})
 
-		ui.Text(c, "Jig 依靠 idalib 无界面打开文件,不启动 IDA 界面。").FontSize(13).TextColor(theme.TextMuted)
+		ui.Text(c, "Jig 加载本机 libidalib，不启动 IDA 界面，也不启动 Python。").FontSize(13).TextColor(theme.TextMuted)
 	})
 
 	ui.Scroll(c).Grow(1).Padding(20, 28).Gap(18).Children(func() {
 		// 3-Segment Horizontal Readout Strip
 		chrome.Card(c).Children(func() {
 			ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
-				idalibVal := "待配置"
+				idalibVal := "未找到"
 				idalibCol := theme.Idle
-				if st.Found {
-					idalibVal = "可用"
+				if st.Library != "" {
+					idalibVal = "可加载"
 					idalibCol = theme.Live
 				}
 				chrome.ReadoutCell(c, "idalib", idalibVal, "无界面逆向引擎", idalibCol)
-				chrome.ReadoutCell(c, "Python", pythonShortName(st), pythonSummary(st), theme.Run)
+				chrome.ReadoutCell(c, "库文件", libraryTitle(st), "本机 libidalib，不打进应用", theme.Run)
 				chrome.ReadoutCell(c, "数据目录", "~/.jig", "状态与样本索引存储", theme.TextMuted)
 			})
 		})
@@ -156,13 +156,13 @@ func ida(c *ui.Context, d *desk.Desk) {
 			}
 			chrome.PathSlotCard(c, "目录", installTitle(d), installLine(d), badge, tone)
 			chrome.ConduitBridge(c, "Headless", ready)
-			chrome.PathSlotCard(c, "Python 解释器", pythonShortName(st), pythonSummary(st), "运行时", "done")
+			chrome.PathSlotCard(c, "libidalib", libraryTitle(st), libraryLine(st), libraryBadge(st), libraryTone(st))
 		})
 
 		// Harmonious Architecture Explanation Card
 		chrome.Plate(c).Padding(16, 18).Gap(8).Children(func() {
 			ui.Text(c, "无插件直连").FontSize(13).FontWeight(500).TextColor(theme.Text)
-			ui.Text(c, "直接通过本机 Python 启动内置 worker 并加载 idalib，不向 IDA 的 plugins 目录安装或注入任何 GUI 插件。").FontSize(12).TextColor(theme.TextMuted)
+			ui.Text(c, "不往 IDA 的 plugins 目录装插件。打开后由原生 worker 调用本机 libidalib 和 Hex-Rays，不启动 Python。").FontSize(12).TextColor(theme.TextMuted)
 		})
 	})
 }
@@ -304,18 +304,32 @@ func installTitle(d *desk.Desk) string {
 	return "未指定安装目录"
 }
 
-func pythonShortName(st idalib.Status) string {
-	if st.Python != "" {
-		return filepath.Base(st.Python)
+func libraryTitle(st idalib.Status) string {
+	if st.Library != "" {
+		return filepath.Base(st.Library)
 	}
-	return "python3"
+	return "未找到"
 }
 
-func pythonSummary(st idalib.Status) string {
-	if st.Python != "" {
-		return product.ShortPath(st.Python)
+func libraryLine(st idalib.Status) string {
+	if st.Library != "" {
+		return product.ShortPath(st.Library)
 	}
-	return "可用"
+	return "安装目录里没有 libidalib"
+}
+
+func libraryBadge(st idalib.Status) string {
+	if st.Library != "" {
+		return "已探测"
+	}
+	return "缺失"
+}
+
+func libraryTone(st idalib.Status) string {
+	if st.Library != "" {
+		return "ok"
+	}
+	return "idle"
 }
 
 func installLine(d *desk.Desk) string {

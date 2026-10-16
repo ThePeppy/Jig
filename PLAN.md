@@ -2,7 +2,7 @@
 
 本目录是项目根。Mygo 绘制窗口，进程内完成库、会话和调用记录。不再以 IDA Pro 窗口为产品对象，不再安装或管理 IDA GUI 插件。
 
-旧仓库 `supper-ida-mcp-tools` 里的 Avalonia 桌面仍是旧入口。Jig 已经能监听 MCP 并拉起 idalib worker。旧入口的删除不在本仓库里做。
+旧仓库 `supper-ida-mcp-tools` 不是本进程的依赖。本仓库不读取它的路径，也不启动它的 Python worker。
 
 ## 已确认的缺陷
 
@@ -30,27 +30,27 @@
 
 ## 依赖边界
 
-IDA Pro、`idapro`、Hex-Rays 许可不能打进应用。能内置的是 worker 和共享分析代码。
+IDA 的许可和 `libidalib` 不能打进应用。分析在独立进程 `native/idalib-worker/jig-idalib` 里完成：链接本机 `libidalib.dylib` 和 `libida.dylib`，用 IDA 9.3 SDK 头文件调用函数列表、反汇编、交叉引用、字符串、导入、搜索、改名、注释和 Hex-Rays `decompile`。不链进窗口进程，不启动 Python，不回头找旧仓库。
 
-worker 今天 `import supper_ida_plugin.tools.analysis`。那是共享工具模块，不是 GUI 插件入口。下一阶段把它随应用打包，用本机 IDA 的 Python 启动。不把它装进 IDA 的 `plugins` 目录。
+一个进程一份数据库。SDK 头文件按 `v9.3.0-release` 取到 `third_party/ida-sdk`，不提交。运行时只探测安装目录，不在窗口进程里 `init_library`。
 
-运行时只探测，不启动 IDA：
+运行时只探测，不加载库：
 
 - 已保存的安装目录优先。
 - 否则在平台应用目录里找名称含 `IDA` 的安装（macOS 为 `/Applications/*.app`）。这是提示，不是全盘搜索。用户始终可以改目录。
-- `python3` 只报告解释器路径。`import idapro` 会启动 IDA，设置页不做这件事。
+- 探测只看 `libidalib` 文件在不在，不调用 `init_library`。
 
 ## 目录
 
 ```text
-app/
+.
   main.go                         进程入口。窗口、文件选择器、拖入。
   mygo.json
   PLAN.md                         本文件。产品切完后删除。
   internal/product                名称、数据目录、路径显示。
   internal/intake                 文件接纳。无 UI。
   internal/catalog                库条目。无磁盘。
-  internal/idalib                 安装目录与 Python 探测。本阶段不拉起 worker。
+  internal/idalib                 安装目录与 libidalib 探测。不加载库。
   internal/desk                   窗口状态与 ~/.jig/state.json。
   internal/ui/theme               spec.json 的颜色和度量。
   internal/ui/chrome              标题栏、分栏、stage、状态条。
@@ -77,7 +77,7 @@ app/
 
 ## 后续阶段
 
-1. 把 worker 和 `supper_ida_plugin.tools` 打进应用资源。用探测到的 IDA Python 启动，打开库中文件，会话页显示真实状态。
+1. 原生 worker 已接上。窗口里打开一个真实文件，确认会话页能看到函数列表和反编译。
 2. 本进程提供 MCP HTTP 与 worker TCP。设置页的端口从「尚未监听」改为真实状态。
 3. 把 Codex / Claude / OpenCode 的配置写到本进程端点。不写旧的 `ida-pro-mcp` 桥。
 4. 用真实二进制验收打开、调用和关闭。然后删除 `mcp-center` 桌面、GUI 插件安装器和 IDA 窗口页。

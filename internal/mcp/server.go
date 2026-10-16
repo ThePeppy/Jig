@@ -21,7 +21,7 @@ type Server struct {
 	Sessions *session.Manager
 	Traces   *trace.Store
 	IdaDir   func() string
-	Python   func() string
+
 	OnChange func()
 
 	ln  net.Listener
@@ -217,11 +217,7 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args map[string]
 		if s.IdaDir != nil {
 			idaDir = s.IdaDir()
 		}
-		py := "python3"
-		if s.Python != nil && s.Python() != "" {
-			py = s.Python()
-		}
-		sess, err := s.Sessions.Launch(ctx, decision.Name, decision.Source, decision.OpenPath, idaDir, py)
+		sess, err := s.Sessions.Launch(ctx, decision.Name, decision.Source, decision.OpenPath, idaDir)
 		if err != nil {
 			return nil, decision.Name, err
 		}

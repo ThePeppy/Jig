@@ -2,6 +2,8 @@ package session
 
 import (
 	"context"
+	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -44,8 +46,20 @@ func TestSessionManagerLifecycle(t *testing.T) {
 
 func TestSessionLaunchValidation(t *testing.T) {
 	m := NewManager()
-	_, err := m.Launch(context.Background(), "", "", "", "", "")
+	_, err := m.Launch(context.Background(), "", "", "", "")
 	if err == nil {
 		t.Fatal("expected error launching with empty target path")
+	}
+}
+
+func TestLaunchDoesNotStartAWorker(t *testing.T) {
+	m := NewManager()
+	dir := t.TempDir()
+	_, err := m.Launch(context.Background(), "sample", filepath.Join(dir, "sample"), filepath.Join(dir, "sample"), dir)
+	if err == nil || !strings.Contains(err.Error(), "libidalib") {
+		t.Fatal(err)
+	}
+	if len(m.Sessions()) != 0 {
+		t.Fatal("launch registered a session")
 	}
 }

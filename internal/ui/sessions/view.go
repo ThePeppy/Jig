@@ -205,7 +205,7 @@ func detail(c *ui.Context, d *desk.Desk, s *session.Session, total int) {
 				chrome.Card(c).Children(func() {
 					ui.Row(c).Dividers(1, theme.BorderSubtle).AlignItems(ui.Stretch).Children(func() {
 						chrome.ReadoutCell(c, "会话 ID", s.ID, "本机实例句柄", theme.Run)
-						chrome.ReadoutCell(c, "进程 PID", fmt.Sprintf("%d", s.PID), "idalib Python 进程", theme.Live)
+						chrome.ReadoutCell(c, "进程 PID", fmt.Sprintf("%d", s.PID), "分析进程", theme.Live)
 						chrome.ReadoutCell(c, "运行时长", s.Elapsed(), "无界面驻留中", theme.Live)
 					})
 				})

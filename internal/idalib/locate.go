@@ -1,11 +1,9 @@
-// Package idalib knows how this app finds and configures a local IDA runtime.
-// It does not start IDA GUI and does not install a GUI plugin.
+// Package idalib finds a local IDA install and its libidalib.
+// It does not load the library, start IDA, or launch a worker.
 package idalib
 
 import (
-	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
@@ -17,7 +15,7 @@ type Status struct {
 	Install  string
 	Found    bool
 	Missing  bool
-	Python   string
+	Library  string
 	Searched string
 }
 
@@ -39,18 +37,18 @@ func ApplicationsDir() string {
 // .app bundle. It does not walk the disk.
 func Probe(configured, applications string) Status {
 	st := Status{Searched: applications}
-	if p, err := exec.LookPath("python3"); err == nil {
-		st.Python = p
-	}
 	if configured != "" {
 		st.Install = configured
 		info, err := os.Stat(configured)
 		st.Found = err == nil && info.IsDir()
 		st.Missing = !st.Found
-		return st
+	} else {
+		st.Install = findInstall(applications)
+		st.Found = st.Install != ""
 	}
-	st.Install = findInstall(applications)
-	st.Found = st.Install != ""
+	if st.Found {
+		st.Library = LibraryFile(st.Install)
+	}
 	return st
 }
 
@@ -70,54 +68,26 @@ func ResolveInstallDir(dir string) string {
 	return dir
 }
 
-// IdalibPythonDir returns the path to idalib/python (containing idapro) inside installDir.
-func IdalibPythonDir(installDir string) string {
+// LibraryFile returns libidalib inside installDir, or "" if it is not there.
+// The file is only stated. Loading it starts the IDA kernel, so Probe does not.
+func LibraryFile(installDir string) string {
 	resolved := ResolveInstallDir(installDir)
 	if resolved == "" {
 		return ""
 	}
-	candidate := filepath.Join(resolved, "idalib", "python")
-	if info, err := os.Stat(filepath.Join(candidate, "idapro")); err == nil && info.IsDir() {
-		return candidate
+	name := "libidalib.so"
+	switch runtime.GOOS {
+	case "windows":
+		name = "idalib.dll"
+	case "darwin":
+		name = "libidalib.dylib"
 	}
-	return ""
-}
-
-// EnsureUserConfig writes ~/.idapro/ida-config.json so `import idapro` locates libidalib.
-func EnsureUserConfig(installDir string) error {
-	resolved := ResolveInstallDir(installDir)
-	if resolved == "" {
-		return nil
+	candidate := filepath.Join(resolved, name)
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return ""
 	}
-	configDir := os.Getenv("IDAUSR")
-	if configDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return err
-		}
-		if runtime.GOOS == "windows" {
-			if appData := os.Getenv("APPDATA"); appData != "" {
-				configDir = filepath.Join(appData, "Hex-Rays", "IDA Pro")
-			} else {
-				configDir = filepath.Join(home, "AppData", "Roaming", "Hex-Rays", "IDA Pro")
-			}
-		} else {
-			configDir = filepath.Join(home, ".idapro")
-		}
-	}
-	if err := os.MkdirAll(configDir, 0o755); err != nil {
-		return err
-	}
-	payload := map[string]any{
-		"Paths": map[string]string{
-			"ida-install-dir": resolved,
-		},
-	}
-	b, err := json.MarshalIndent(payload, "", "    ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(configDir, "ida-config.json"), b, 0o644)
+	return candidate
 }
 
 func findInstall(root string) string {

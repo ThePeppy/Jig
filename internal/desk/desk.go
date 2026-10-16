@@ -119,9 +119,7 @@ func (d *Desk) StartServers() {
 			}
 			return d.Runtime().Install
 		},
-		Python: func() string {
-			return d.Runtime().Python
-		},
+
 		OnChange: func() {
 			if d.NotifyUI != nil {
 				d.NotifyUI()
@@ -173,7 +171,7 @@ func (d *Desk) StartSession(e catalog.Entry) error {
 		idaDir = rt.Install
 	}
 	start := time.Now()
-	s, err := d.Sessions.Launch(context.Background(), e.Name, e.Source, e.Path, idaDir, rt.Python)
+	s, err := d.Sessions.Launch(context.Background(), e.Name, e.Source, e.Path, idaDir)
 	dur := time.Since(start)
 	if err != nil {
 		d.Traces.Append(trace.Entry{
