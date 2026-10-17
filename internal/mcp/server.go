@@ -8,9 +8,12 @@ import (
 	"net"
 	"net/http"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"jig/internal/intake"
+	"jig/internal/pack"
 	"jig/internal/session"
 	"jig/internal/trace"
 )
@@ -26,6 +29,10 @@ type Server struct {
 
 	ln  net.Listener
 	srv *http.Server
+
+	mu   sync.Mutex
+	subs map[chan []byte]struct{}
+	seq  atomic.Uint64
 }
 
 type rpcRequest struct {
@@ -68,6 +75,7 @@ func (s *Server) URL() string {
 
 // Close shuts down the HTTP server.
 func (s *Server) Close() error {
+	s.closeSubs()
 	if s.srv != nil {
 		return s.srv.Close()
 	}
@@ -82,10 +90,23 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusNotFound, map[string]any{"error": "not found"})
+	switch r.Method {
+	case http.MethodGet:
+		s.handleSSE(w, r)
 		return
+	case http.MethodDelete:
+		w.WriteHeader(http.StatusOK)
+		return
+	case http.MethodPost:
+		s.handleRPC(w, r)
+		return
+	default:
+		w.Header().Set("Allow", "GET, POST, DELETE")
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 	}
+}
+
+func (s *Server) handleRPC(w http.ResponseWriter, r *http.Request) {
 	var req rpcRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, rpcError(nil, -32700, "Parse error."))
@@ -103,6 +124,7 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 		if v, ok := req.Params["protocolVersion"].(string); ok && v != "" {
 			proto = v
 		}
+		w.Header().Set("Mcp-Session-Id", newMCPSessionID())
 		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{
 			"protocolVersion": proto,
 			"capabilities": map[string]any{
@@ -113,12 +135,17 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 				"title":   "Jig",
 				"version": "0.2.0",
 			},
+			"instructions": "Address tools accept address or query. Pass instanceId when more than one session is ready. ida_open may take pack; otherwise ida_attach_pack. Pack tools appear on tools/list after attach and disappear on detach; clients must honor notifications/tools/list_changed. Default decompile waits for Hex-Rays; create=false does not invent functions.",
 		}))
 	case "ping":
 		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{}))
 	case "tools/list":
+		var packs []*pack.Pack
+		if s.Sessions != nil {
+			packs = s.Sessions.AttachedPacks()
+		}
 		writeJSON(w, http.StatusOK, rpcResult(req.ID, map[string]any{
-			"tools": toolDefinitions(),
+			"tools": toolDefinitionsFor(packs),
 		}))
 	case "tools/call":
 		res := s.callTool(r.Context(), req.Params)
@@ -203,6 +230,8 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args map[string]
 				"databasePath": sess.DatabasePath,
 				"sessionState": sess.State,
 				"pid":          sess.PID,
+				"packId":       sess.PackID,
+				"packPath":     sess.PackPath,
 			})
 		}
 		return map[string]any{"targets": list}, "center", nil
@@ -221,46 +250,57 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args map[string]
 		if err != nil {
 			return nil, decision.Name, err
 		}
-		return map[string]any{
+		out := map[string]any{
 			"instanceId":   sess.ID,
 			"targetName":   sess.TargetName,
 			"databasePath": sess.DatabasePath,
 			"pid":          sess.PID,
 			"state":        sess.State,
-		}, decision.Name, nil
+		}
+		if packPath, _ := args["pack"].(string); packPath != "" {
+			p, perr := s.Sessions.AttachPack(sess.ID, packPath)
+			if perr != nil {
+				out["packError"] = perr.Error()
+			} else {
+				out["packId"] = p.ID
+				out["packPath"] = p.Path
+				s.notifyToolsChanged()
+			}
+		}
+		return out, decision.Name, nil
 
 	case "ida_close_target":
 		if instanceID == "" {
 			return nil, "", fmt.Errorf("instanceId is required")
 		}
 		err := s.Sessions.Close(instanceID)
+		if err == nil {
+			s.notifyToolsChanged()
+		}
+		return map[string]any{"ok": err == nil, "instanceId": instanceID}, instanceID, err
+
+	case "ida_attach_pack":
+		path, _ := args["path"].(string)
+		p, err := s.Sessions.AttachPack(instanceID, path)
+		if err != nil {
+			return nil, instanceID, err
+		}
+		s.notifyToolsChanged()
+		return map[string]any{"ok": true, "packId": p.ID, "packPath": p.Path, "instanceId": instanceID}, instanceID, nil
+
+	case "ida_detach_pack":
+		err := s.Sessions.DetachPack(instanceID)
+		if err == nil {
+			s.notifyToolsChanged()
+		}
 		return map[string]any{"ok": err == nil, "instanceId": instanceID}, instanceID, err
 	}
 
-	workerToolMap := map[string]string{
-		"ida_ping_target":         "target.ping",
-		"ida_get_metadata":        "target.get_metadata",
-		"ida_save_target":         "session.save",
-		"ida_start_auto_analysis": "session.start_auto_analysis",
-		"ida_stop_auto_analysis":  "session.stop_auto_analysis",
-		"ida_list_functions":      "analysis.list_functions",
-		"ida_get_function":        "analysis.get_function",
-		"ida_decompile":           "analysis.decompile",
-		"ida_disassemble":         "analysis.disassemble",
-		"ida_xrefs":               "analysis.xrefs",
-		"ida_list_strings":        "analysis.list_strings",
-		"ida_list_imports":        "analysis.list_imports",
-		"ida_get_bytes":           "analysis.get_bytes",
-		"ida_search_text":         "analysis.search_text",
-		"ida_rename":              "analysis.rename",
-		"ida_set_comment":         "analysis.set_comment",
+	if _, ok := workerToolMap()[name]; !ok {
+		return s.runPackTool(ctx, instanceID, name, args)
 	}
 
-	workerTool, ok := workerToolMap[name]
-	if !ok {
-		return nil, instanceID, fmt.Errorf("unknown tool: %s", name)
-	}
-
+	workerTool := workerToolMap()[name]
 	targetLabel := instanceID
 	for _, sess := range s.Sessions.Sessions() {
 		if instanceID == "" || sess.ID == instanceID {
@@ -273,41 +313,6 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args map[string]
 	defer cancel()
 	res, err := s.Sessions.CallTool(cctx, instanceID, workerTool, args)
 	return res, targetLabel, err
-}
-
-func toolDefinitions() []map[string]any {
-	names := []struct {
-		name, desc string
-	}{
-		{"ida_list_targets", "List active headless idalib sessions."},
-		{"ida_open", "Open a binary or IDA database in a headless idalib worker."},
-		{"ida_close_target", "Close an active idalib session."},
-		{"ida_save_target", "Save the IDA database for an active session."},
-		{"ida_get_metadata", "Return binary and database metadata for a session."},
-		{"ida_list_functions", "List functions from an IDA database."},
-		{"ida_get_function", "Resolve one function by address or name."},
-		{"ida_decompile", "Decompile one function with Hex-Rays."},
-		{"ida_disassemble", "Return disassembly lines for one function."},
-		{"ida_xrefs", "List code and data cross-references to or from an address."},
-		{"ida_list_strings", "List strings from an IDA database."},
-		{"ida_list_imports", "List imports from an IDA database."},
-		{"ida_get_bytes", "Read raw bytes from an IDA database."},
-		{"ida_search_text", "Search IDA's rendered listing with a bounded paged scanner."},
-		{"ida_rename", "Rename an address or function in an IDA database."},
-		{"ida_set_comment", "Set a regular or repeatable comment at an address."},
-	}
-	out := make([]map[string]any, 0, len(names))
-	for _, t := range names {
-		out = append(out, map[string]any{
-			"name":        t.name,
-			"description": t.desc,
-			"inputSchema": map[string]any{
-				"type":       "object",
-				"properties": map[string]any{},
-			},
-		})
-	}
-	return out
 }
 
 func rpcResult(id any, result any) map[string]any {

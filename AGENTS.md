@@ -23,7 +23,8 @@
 | `internal/desk` | 窗口状态。只把库条目和 `idaDir` 写入 `~/.jig/state.json`。会话和记录不落盘。 |
 | `internal/idalib` | 探测安装目录和 `libidalib` 是否存在。不加载。 |
 | `internal/session` | worker 生命周期 + TCP hub `127.0.0.1:9399`。 |
-| `internal/mcp` | MCP HTTP `127.0.0.1:9401`，`/mcp` 与 `/health`。 |
+| `internal/mcp` | MCP HTTP `127.0.0.1:9401`，`/mcp` 与 `/health`。POST JSON-RPC；GET SSE 推 `notifications/tools/list_changed`；DELETE 结束客户端会话。`tools.go` 是核心清单唯一来源。 |
+| `internal/pack` | 读 `pack.json`。不谈 IDA、不谈窗口、不谈 worker。相对路径相对 pack.json 所在目录。 |
 | `internal/trace` | 内存环形记录，默认 200 条，新的在前。 |
 | `internal/ui/theme` | 颜色和度量。改表面先改这里。 |
 | `internal/ui/chrome` | 标题栏、分栏、卡片、状态标记。页面复用，不另画一套。 |
@@ -57,13 +58,21 @@ Worker 查找：`JIG_IDALIB_WORKER` 优先。安装后的应用用 `Contents/Res
 
 MCP 名到 worker 名：
 
-- 中心自己处理：`ida_list_targets`、`ida_open`、`ida_close_target`。`ida_open` 必须先过 `intake.Accept`。
+- 中心自己处理：`ida_list_targets`、`ida_open`、`ida_close_target`、`ida_attach_pack`、`ida_detach_pack`。`ida_open` 必须先过 `intake.Accept`。`ida_open` 可带 `pack`。
 - `ida_ping_target` → `target.ping`
 - `ida_get_metadata` → `target.get_metadata`
 - `ida_save_target` → `session.save`；另有 `session.start_auto_analysis` / `session.stop_auto_analysis` / `session.close`
-- `ida_list_functions` 等 → `analysis.*`（`list_functions` `get_function` `decompile` `disassemble` `xrefs` `list_strings` `list_imports` `get_bytes` `search_text` `rename` `set_comment`）
+- `ida_list_functions` 等 → `analysis.*`（`list_functions` `get_function` `decompile` `disassemble` `xrefs` `calls` `callees` `lvars` `list_strings` `list_imports` `get_bytes` `search_text` `rename` `set_comment`）
 
-对外清单是 `toolDefinitions()`。未公开的名字不要擅自写进 schema，也不要删掉已有分发。worker 调用超时 60s。同一 `OpenPath` 已有会话则复用。
+对外清单是 `toolDefinitionsFor`。地址类工具的入参是 `address`，`query` 仍是别名。`create` 默认 false，不在地址上发明函数。`ida_decompile` 默认等 Hex-Rays（不再 `DECOMP_NO_WAIT`），并带 `lvars`。`ida_rename` 的 `kind=lvar` 需要 `oldName`。worker 调用超时 60s。同一 `OpenPath` 已有会话则复用。
+
+## 分析包
+
+项目旁一份 `pack.json`，挂到当前会话，不换 Jig、不换 IDA。`tools/list` 在挂上后多出包里的工具，卸下后消失；挂/卸/关会话后推 `notifications/tools/list_changed`，客户端必须重拉清单。包不能对核心工具改名，也不能打开 IDA、写窗口或扫目录。
+
+现有 kind 只有 `fields_from_calls`：用 codec TSV（depth 默认 0）排字段，对 **call_va 所在函数** 跑 `analysis.calls` 取 lvar 名。不要只反编译 `handler_va`——那经常是旁边的失败提示 stub。Agent 用 `category`+`packetId` 或 handler `address`。命名写回仍走 `ida_rename`。
+
+失败是工具错误，不是 worker 退出。
 
 探测只看文件在不在：已存目录优先，否则只扫平台应用目录里名称含 `IDA` 的安装（macOS 为 `/Applications/*.app`）。不是全盘搜索。
 

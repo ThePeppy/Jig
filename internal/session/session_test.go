@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -41,6 +42,38 @@ func TestSessionManagerLifecycle(t *testing.T) {
 
 	if len(m.Sessions()) != 0 {
 		t.Fatalf("expected 0 sessions after close")
+	}
+}
+
+func TestAttachPack(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "codec.tsv"), []byte("category\tpacket_id\tpacket_name\thandler_va\tfield_index\tdepth\treader\tsize\tcall_va\treader_va\nCMD\t1\tLOGIN\t0x1\t0\t0\tu8\t1\t0x2\t0x3\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pack.json"), []byte(`{"id":"dnf90","tools":[{"name":"ida_dnf90_packet_fields","kind":"fields_from_calls","config":{"codec":"codec.tsv"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := NewManager()
+	s := &Session{ID: "sess", TargetName: "a.bin", SourcePath: "/tmp/a.bin", State: StateReady}
+	m.Register(s)
+	p, err := m.AttachPack("sess", dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ID != "dnf90" {
+		t.Fatalf("%s", p.ID)
+	}
+	if m.PackOf("sess") == nil {
+		t.Fatal("pack missing")
+	}
+	if len(m.AttachedPacks()) != 1 {
+		t.Fatalf("attached %d", len(m.AttachedPacks()))
+	}
+	if err := m.DetachPack("sess"); err != nil {
+		t.Fatal(err)
+	}
+	if m.PackOf("sess") != nil {
+		t.Fatal("detach failed")
 	}
 }
 

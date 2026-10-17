@@ -18,10 +18,12 @@
 #include <xref.hpp>
 #include <iostream>
 
+
 #include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <filesystem>
+#include <map>
 #include <regex>
 #include <sstream>
 #include <stdexcept>
@@ -93,12 +95,21 @@ ea_t parse_address(const Json *query) {
   return ea;
 }
 
-ea_t parse_function_start(const Json *query) {
-  ea_t ea = parse_address(query);
+const Json *addr_arg(const Json &args) {
+  const Json *v = args.find("address");
+  if (v == nullptr) v = args.find("query");
+  return v;
+}
+
+ea_t parse_function_start(const Json &args) {
+  ea_t ea = parse_address(addr_arg(args));
   func_t *func = get_func(ea);
   if (func != nullptr) {
     if (func->start_ea == BADADDR) throw std::runtime_error("invalid function address: " + hex_ea(ea));
     return func->start_ea;
+  }
+  if (!args.bool_or("create", false)) {
+    throw std::runtime_error("not in a function: " + hex_ea(ea));
   }
   if (!is_code(get_flags(ea))) {
     if (create_insn(ea) <= 0) throw std::runtime_error("无法在 " + hex_ea(ea) + " 定义为代码");
@@ -269,14 +280,28 @@ Json list_functions(const Json &args) {
 }
 
 Json get_function(const Json &args) {
-  ea_t start = parse_function_start(args.find("query"));
+  ea_t start = parse_function_start(args);
   func_t *func = get_func(start);
   if (func == nullptr) throw std::runtime_error("no function at " + hex_ea(start));
   return function_row(func);
 }
 
+Json lvar_row(const lvar_t &lv) {
+  Json row = Json::obj();
+  row["name"] = Json::str(lv.name.c_str());
+  qstring ts;
+  if (!lv.tif.empty()) lv.tif.print(&ts);
+  row["type"] = ts.empty() ? Json::nul() : Json::str(ts.c_str());
+  row["isArg"] = Json::boolean(lv.is_arg_var());
+  row["isResult"] = Json::boolean(lv.is_result_var());
+  row["userName"] = Json::boolean(lv.has_user_name());
+  row["niceName"] = Json::boolean(lv.has_nice_name());
+  row["width"] = Json::integer(lv.width);
+  return row;
+}
+
 Json decompile_function(const Json &args) {
-  ea_t start = parse_function_start(args.find("query"));
+  ea_t start = parse_function_start(args);
   Json out = Json::obj();
   out["addr"] = Json::str(hex_ea(start));
   if (!ensure_hexrays()) {
@@ -291,7 +316,7 @@ Json decompile_function(const Json &args) {
     return out;
   }
   hexrays_failure_t hf;
-  cfuncptr_t cfunc = decompile(func, &hf, DECOMP_NO_WAIT);
+  cfuncptr_t cfunc = decompile(func, &hf, 0);
   if (cfunc == nullptr) {
     qstring why = hf.desc();
     out["code"] = Json::nul();
@@ -307,11 +332,17 @@ Json decompile_function(const Json &args) {
     code += plain.c_str();
   }
   out["code"] = Json::str(code);
+  Json lvars = Json::arr();
+  lvars_t *vars = cfunc->get_lvars();
+  if (vars != nullptr) {
+    for (size_t i = 0; i < vars->size(); ++i) lvars.push(lvar_row((*vars)[i]));
+  }
+  out["lvars"] = std::move(lvars);
   return out;
 }
 
 Json disassemble(const Json &args) {
-  ea_t start = parse_function_start(args.find("query"));
+  ea_t start = parse_function_start(args);
   int max_lines = clamp_arg(args, "maxLines", nullptr, 200, 1, 5000);
   func_t *func = get_func(start);
   if (func == nullptr) throw std::runtime_error("no function at " + hex_ea(start));
@@ -335,9 +366,11 @@ Json disassemble(const Json &args) {
   return out;
 }
 
-Json xref_row(const char *direction, ea_t source, ea_t target) {
+
+Json xref_row(const char *direction, const char *kind, ea_t source, ea_t target) {
   Json row = Json::obj();
   row["direction"] = Json::str(direction);
+  row["kind"] = Json::str(kind);
   row["from"] = Json::str(hex_ea(source));
   row["to"] = Json::str(hex_ea(target));
   qstring from_name = get_name(source);
@@ -350,29 +383,172 @@ Json xref_row(const char *direction, ea_t source, ea_t target) {
 }
 
 Json xrefs(const Json &args) {
-  ea_t ea = parse_address(args.find("query"));
+  ea_t ea = parse_address(addr_arg(args));
   std::string direction = lower_copy(args.str_or("direction", "both"));
+  std::string kind = lower_copy(args.str_or("kind", "both"));
   int max_items = clamp_arg(args, "max", nullptr, 200, 1, 5000);
   Json rows = Json::arr();
-  if (direction == "to" || direction == "both") {
+  auto push_code_to = [&]() {
     ea_t ref = get_first_cref_to(ea);
     while (ref != BADADDR && static_cast<int>(rows.a.size()) < max_items) {
-      rows.push(xref_row("to", ref, ea));
+      rows.push(xref_row("to", "code", ref, ea));
       ref = get_next_cref_to(ea, ref);
     }
-  }
-  if (direction == "from" || direction == "both") {
+  };
+  auto push_data_to = [&]() {
+    ea_t ref = get_first_dref_to(ea);
+    while (ref != BADADDR && static_cast<int>(rows.a.size()) < max_items) {
+      rows.push(xref_row("to", "data", ref, ea));
+      ref = get_next_dref_to(ea, ref);
+    }
+  };
+  auto push_code_from = [&]() {
     ea_t ref = get_first_cref_from(ea);
     while (ref != BADADDR && static_cast<int>(rows.a.size()) < max_items) {
-      rows.push(xref_row("from", ea, ref));
+      rows.push(xref_row("from", "code", ea, ref));
       ref = get_next_cref_from(ea, ref);
     }
+  };
+  auto push_data_from = [&]() {
+    ea_t ref = get_first_dref_from(ea);
+    while (ref != BADADDR && static_cast<int>(rows.a.size()) < max_items) {
+      rows.push(xref_row("from", "data", ea, ref));
+      ref = get_next_dref_from(ea, ref);
+    }
+  };
+  bool want_code = kind == "code" || kind == "both";
+  bool want_data = kind == "data" || kind == "both";
+  if (direction == "to" || direction == "both") {
+    if (want_code) push_code_to();
+    if (want_data) push_data_to();
+  }
+  if (direction == "from" || direction == "both") {
+    if (want_code) push_code_from();
+    if (want_data) push_data_from();
   }
   Json out = Json::obj();
   out["addr"] = Json::str(hex_ea(ea));
   out["direction"] = Json::str(direction);
+  out["kind"] = Json::str(kind);
   out["data"] = std::move(rows);
   out["truncated"] = Json::boolean(static_cast<int>(out.find("data")->a.size()) >= max_items);
+  return out;
+}
+
+cfuncptr_t decompile_ready(ea_t start) {
+  if (!ensure_hexrays()) throw std::runtime_error("Hex-Rays plugin is not available for this processor");
+  func_t *func = get_func(start);
+  if (func == nullptr) throw std::runtime_error("no function at " + hex_ea(start));
+  hexrays_failure_t hf;
+  cfuncptr_t cfunc = decompile(func, &hf, 0);
+  if (cfunc == nullptr) {
+    qstring why = hf.desc();
+    throw std::runtime_error(why.empty() ? "Hex-Rays returned no decompilation" : why.c_str());
+  }
+  return cfunc;
+}
+
+struct call_collector : public ctree_parentee_t {
+  cfunc_t *fn;
+  Json rows = Json::arr();
+  int max_items = 200;
+  explicit call_collector(cfunc_t *f) : ctree_parentee_t(false), fn(f) {}
+  int idaapi visit_expr(cexpr_t *e) override {
+    if (e == nullptr || e->op != cot_call) return 0;
+    if (static_cast<int>(rows.a.size()) >= max_items) return 1;
+    Json row = Json::obj();
+    row["callSite"] = Json::str(hex_ea(e->ea));
+    ea_t callee = BADADDR;
+    std::string callee_name;
+    if (e->x != nullptr) {
+      if (e->x->op == cot_obj) {
+        callee = e->x->obj_ea;
+        callee_name = func_name(callee);
+      } else if (e->x->op == cot_helper && e->x->helper != nullptr) {
+        callee_name = e->x->helper;
+      } else {
+        qstring pretty;
+        e->x->print1(&pretty, fn);
+        tag_remove(&pretty);
+        callee_name = pretty.c_str();
+      }
+    }
+    row["callee"] = callee == BADADDR ? Json::nul() : Json::str(hex_ea(callee));
+    row["calleeName"] = Json::str(callee_name);
+    cexpr_t *p = parent_expr();
+    if (p != nullptr && is_assignment(p->op) && p->y == e && p->x != nullptr && p->x->op == cot_var) {
+      lvars_t *lvars = fn->get_lvars();
+      int idx = p->x->v.idx;
+      if (lvars != nullptr && idx >= 0 && idx < static_cast<int>(lvars->size())) {
+        const lvar_t &lv = (*lvars)[static_cast<size_t>(idx)];
+        row["assignedTo"] = Json::str(lv.name.c_str());
+        row["assignedNice"] = Json::boolean(lv.has_user_name() || lv.has_nice_name());
+      }
+    }
+    Json args = Json::arr();
+    if (e->a != nullptr) {
+      for (size_t i = 0; i < e->a->size(); ++i) {
+        qstring pretty;
+        (*e->a)[i].print1(&pretty, fn);
+        tag_remove(&pretty);
+        args.push(Json::str(pretty.c_str()));
+      }
+    }
+    row["args"] = std::move(args);
+    rows.push(std::move(row));
+    return 0;
+  }
+};
+
+Json collect_calls(const Json &args) {
+  ea_t start = parse_function_start(args);
+  cfuncptr_t cfunc = decompile_ready(start);
+  call_collector walk(cfunc);
+  walk.max_items = clamp_arg(args, "max", nullptr, 200, 1, 2000);
+  walk.apply_to(&cfunc->body, nullptr);
+  Json out = Json::obj();
+  out["addr"] = Json::str(hex_ea(start));
+  out["calls"] = std::move(walk.rows);
+  out["truncated"] = Json::boolean(static_cast<int>(out.find("calls")->a.size()) >= walk.max_items);
+  return out;
+}
+
+Json collect_callees(const Json &args) {
+  Json calls = collect_calls(args);
+  std::map<std::string, Json> unique;
+  const Json *rows = calls.find("calls");
+  if (rows != nullptr) {
+    for (const Json &row : rows->a) {
+      const Json *name = row.find("calleeName");
+      const Json *ea = row.find("callee");
+      std::string key = ea != nullptr && ea->type == Json::STR ? ea->s : (name != nullptr ? name->s : "");
+      if (key.empty() || unique.count(key)) continue;
+      Json one = Json::obj();
+      one["callee"] = ea != nullptr && ea->type == Json::STR ? Json::str(ea->s) : Json::nul();
+      one["calleeName"] = name != nullptr ? Json::str(name->s) : Json::str("");
+      unique.emplace(key, std::move(one));
+    }
+  }
+  Json data = Json::arr();
+  for (auto &kv : unique) data.push(std::move(kv.second));
+  Json out = Json::obj();
+  const Json *addr = calls.find("addr");
+  if (addr != nullptr) out["addr"] = Json::str(addr->s);
+  out["callees"] = std::move(data);
+  return out;
+}
+
+Json list_lvars(const Json &args) {
+  ea_t start = parse_function_start(args);
+  cfuncptr_t cfunc = decompile_ready(start);
+  Json lvars = Json::arr();
+  lvars_t *vars = cfunc->get_lvars();
+  if (vars != nullptr) {
+    for (size_t i = 0; i < vars->size(); ++i) lvars.push(lvar_row((*vars)[i]));
+  }
+  Json out = Json::obj();
+  out["addr"] = Json::str(hex_ea(start));
+  out["lvars"] = std::move(lvars);
   return out;
 }
 
@@ -446,7 +622,7 @@ Json list_imports(const Json &args) {
 }
 
 Json get_bytes_tool(const Json &args) {
-  ea_t ea = parse_address(args.find("address"));
+  ea_t ea = parse_address(addr_arg(args));
   int size = clamp_arg(args, "size", nullptr, 16, 1, 1048576);
   std::vector<unsigned char> buf(static_cast<size_t>(size));
   ssize_t got = get_bytes(buf.data(), size, ea);
@@ -470,22 +646,36 @@ Json get_bytes_tool(const Json &args) {
 }
 
 Json rename_tool(const Json &args) {
-  ea_t ea = parse_address(args.find("address"));
+  std::string kind = lower_copy(args.str_or("kind", "function"));
   std::string name = args.str_or("newName");
   while (!name.empty() && std::isspace(static_cast<unsigned char>(name.front()))) name.erase(name.begin());
   while (!name.empty() && std::isspace(static_cast<unsigned char>(name.back()))) name.pop_back();
   if (name.empty()) throw std::runtime_error("newName is required");
+  Json out = Json::obj();
+  out["kind"] = Json::str(kind);
+  out["newName"] = Json::str(name);
+  if (kind == "lvar") {
+    ea_t start = parse_function_start(args);
+    std::string old_name = args.str_or("oldName");
+    if (old_name.empty()) throw std::runtime_error("oldName is required for kind=lvar");
+    if (!ensure_hexrays()) throw std::runtime_error("Hex-Rays plugin is not available for this processor");
+    bool ok = rename_lvar(start, old_name.c_str(), name.c_str());
+    if (ok) g_dirty = true;
+    out["addr"] = Json::str(hex_ea(start));
+    out["oldName"] = Json::str(old_name);
+    out["ok"] = Json::boolean(ok);
+    return out;
+  }
+  ea_t ea = parse_address(addr_arg(args));
   bool ok = set_name(ea, name.c_str(), SN_CHECK);
   if (ok) g_dirty = true;
-  Json out = Json::obj();
   out["addr"] = Json::str(hex_ea(ea));
-  out["newName"] = Json::str(name);
   out["ok"] = Json::boolean(ok);
   return out;
 }
 
 Json set_comment_tool(const Json &args) {
-  ea_t ea = parse_address(args.find("address"));
+  ea_t ea = parse_address(addr_arg(args));
   std::string text = args.str_or("text");
   bool repeatable = args.bool_or("repeatable", false);
   bool ok = set_cmt(ea, text.c_str(), repeatable);
@@ -886,6 +1076,9 @@ Json execute_tool(const std::string &name, const Json &args, const std::string &
   if (name == "analysis.decompile") return decompile_function(args);
   if (name == "analysis.disassemble") return disassemble(args);
   if (name == "analysis.xrefs") return xrefs(args);
+  if (name == "analysis.calls") return collect_calls(args);
+  if (name == "analysis.callees") return collect_callees(args);
+  if (name == "analysis.lvars") return list_lvars(args);
   if (name == "analysis.list_strings") return list_strings(args);
   if (name == "analysis.list_imports") return list_imports(args);
   if (name == "analysis.get_bytes") return get_bytes_tool(args);

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"jig/internal/idalib"
+	"jig/internal/pack"
 )
 
 // State describes the lifecycle stage of a worker session.
@@ -45,6 +46,8 @@ type Session struct {
 	StartedAt    time.Time      `json:"startedAt"`
 	Error        string         `json:"error,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
+	PackID       string         `json:"packId,omitempty"`
+	PackPath     string         `json:"packPath,omitempty"`
 
 	cmd     *exec.Cmd
 	cancel  context.CancelFunc
@@ -53,6 +56,7 @@ type Session struct {
 	closing bool
 	writeM  sync.Mutex
 	mu      sync.Mutex
+	pack    *pack.Pack
 }
 
 // Elapsed returns how long the session has been active.
@@ -224,19 +228,12 @@ func (m *Manager) handleConn(conn net.Conn) {
 
 // CallTool invokes a tool on a connected worker session and waits for the result.
 func (m *Manager) CallTool(ctx context.Context, instanceID, toolName string, arguments map[string]any) (any, error) {
-	m.mu.Lock()
-	var target *Session
-	if instanceID != "" {
-		target = m.sessions[instanceID]
-	} else {
-		for _, id := range m.order {
-			if s := m.sessions[id]; s != nil && s.State == StateReady && s.conn != nil {
-				target = s
-				break
-			}
-		}
+	target, err := m.readySession(instanceID)
+	if err != nil {
+		return nil, err
 	}
-	if target == nil {
+	m.mu.Lock()
+	if m.sessions[target.ID] != target {
 		m.mu.Unlock()
 		return nil, fmt.Errorf("no active idalib session found")
 	}
@@ -268,7 +265,7 @@ func (m *Manager) CallTool(ctx context.Context, instanceID, toolName string, arg
 	}
 
 	target.writeM.Lock()
-	err := writeWireMessage(conn, msg)
+	err = writeWireMessage(conn, msg)
 	target.writeM.Unlock()
 	if err != nil {
 		m.mu.Lock()
@@ -321,6 +318,107 @@ func (m *Manager) FindByPath(path string) (*Session, bool) {
 		}
 	}
 	return nil, false
+}
+
+// Get returns a live session by id.
+func (m *Manager) Get(id string) (*Session, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.sessions[id]
+	if s == nil || s.State == StateClosed {
+		return nil, false
+	}
+	return s, true
+}
+
+// AttachPack loads pack.json onto the session. The worker is unchanged.
+func (m *Manager) AttachPack(id, path string) (*pack.Pack, error) {
+	s, err := m.readySession(id)
+	if err != nil {
+		return nil, err
+	}
+	p, err := pack.Load(path)
+	if err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	s.pack = p
+	s.PackID = p.ID
+	s.PackPath = p.Path
+	s.mu.Unlock()
+	m.notify()
+	return p, nil
+}
+
+// DetachPack drops the session pack. Core tools stay.
+func (m *Manager) DetachPack(id string) error {
+	s, err := m.readySession(id)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.pack = nil
+	s.PackID = ""
+	s.PackPath = ""
+	s.mu.Unlock()
+	m.notify()
+	return nil
+}
+
+// PackOf returns the pack attached to the session, if any.
+func (m *Manager) PackOf(id string) *pack.Pack {
+	s, err := m.readySession(id)
+	if err != nil {
+		return nil
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.pack
+}
+
+// AttachedPacks is the union of packs on live sessions, first-seen pack id wins.
+func (m *Manager) AttachedPacks() []*pack.Pack {
+	seen := map[string]struct{}{}
+	var out []*pack.Pack
+	for _, s := range m.Sessions() {
+		s.mu.Lock()
+		p := s.pack
+		s.mu.Unlock()
+		if p == nil {
+			continue
+		}
+		if _, ok := seen[p.ID]; ok {
+			continue
+		}
+		seen[p.ID] = struct{}{}
+		out = append(out, p)
+	}
+	return out
+}
+
+func (m *Manager) readySession(id string) (*Session, error) {
+	if id == "" {
+		ready := 0
+		var only *Session
+		for _, s := range m.Sessions() {
+			if s.State == StateReady {
+				ready++
+				only = s
+			}
+		}
+		if ready == 1 {
+			return only, nil
+		}
+		if ready == 0 {
+			return nil, fmt.Errorf("no active idalib session found")
+		}
+		return nil, fmt.Errorf("instanceId is required when more than one session is open")
+	}
+	s, ok := m.Get(id)
+	if !ok {
+		return nil, fmt.Errorf("no active idalib session found")
+	}
+	return s, nil
 }
 
 // Register tracks a pre-constructed session.
