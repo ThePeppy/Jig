@@ -1,10 +1,9 @@
-// Package appview is the window content.
+// Package appview is the window content: the frame and the current page.
 package appview
 
 import (
-	"time"
-
 	"github.com/egoist/mygo/ui"
+
 	"jig/internal/desk"
 	"jig/internal/ui/chrome"
 	"jig/internal/ui/library"
@@ -18,14 +17,12 @@ func New(d *desk.Desk) func(*ui.Context) {
 	return func(c *ui.Context) {
 		c.SetTheme(theme.Jig())
 		chrome.Shell(c, d, func() {
-			ui.Column(c).
+			ui.Row(c).
 				Key(d.Tab).
 				Grow(1).
-				Transition(ui.ElementTransition{
-					Duration: 100 * time.Millisecond,
-					Ease:     ui.EaseOut,
-					Enter:    &ui.Motion{Opacity: 0},
-				}).
+				MinWidth(0).
+				AlignItems(ui.Stretch).
+				Transition(chrome.PageTransition).
 				Children(func() {
 					switch d.Tab {
 					case desk.TabTrace:

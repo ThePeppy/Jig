@@ -9,6 +9,7 @@
 #include <idp.hpp>
 #include <kernwin.hpp>
 #include <lines.hpp>
+#include <loader.hpp>
 #include <diskio.hpp>
 #include <nalt.hpp>
 #include <name.hpp>
@@ -935,6 +936,13 @@ Json metadata(const std::string &instance_id, const std::string &input_path) {
   out["autoAnalysisComplete"] = Json::boolean(complete);
   out["autoAnalysisState"] = Json::str(state_name);
   out["autoAnalysisRunning"] = Json::boolean((g_pump && !complete) || state_name != "AU_NONE");
+  char file_type[256] = {};
+  get_file_type_name(file_type, sizeof(file_type));
+  out["fileType"] = file_type[0] ? Json::str(file_type) : Json::nul();
+  qstring proc = inf_get_procname();
+  out["processor"] = proc.empty() ? Json::nul() : Json::str(proc.c_str());
+  out["bitness"] = Json::integer(inf_is_64bit() ? 64 : inf_is_32bit_exactly() ? 32 : 16);
+  out["imageBase"] = Json::str(hex_ea(get_imagebase()));
   Json caps = Json::obj();
   caps["decompiler"] = Json::boolean(ensure_hexrays());
   caps["write"] = Json::boolean(true);

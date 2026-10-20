@@ -25,12 +25,12 @@
 | `internal/session` | worker 生命周期 + TCP hub `127.0.0.1:9399`。 |
 | `internal/mcp` | MCP HTTP `127.0.0.1:9401`，`/mcp` 与 `/health`。POST JSON-RPC；GET SSE 推 `notifications/tools/list_changed`；DELETE 结束客户端会话。`tools.go` 是核心清单唯一来源。 |
 | `internal/pack` | 读 `pack.json`。不谈 IDA、不谈窗口、不谈 worker。相对路径相对 pack.json 所在目录。 |
-| `internal/trace` | 内存环形记录，默认 200 条，新的在前。 |
+| `internal/trace` | 内存环形记录，默认 200 条，新的在前。带入参和结果（各截到 64KiB），ID 清空后不复用。 |
 | `internal/ui/theme` | 颜色和度量。改表面先改这里。 |
-| `internal/ui/chrome` | 标题栏、分栏、卡片、状态标记。页面复用，不另画一套。 |
+| `internal/ui/chrome` | 侧栏、标题条、按键、状态点/胶囊、卡片、事实表、空态卡、故障卡。页面复用，不另画一套。 |
 | `internal/ui/{library,trace,settings}` | 三个标签页。打开的 worker 画在数据库页，不另开会话页。 |
 | `internal/ui/appview` | 三页组合。 |
-| `internal/menubar` | 菜单栏状态项。打开、关闭分析会话，退出。不创建窗口。 |
+| `internal/menubar` | 菜单栏图标 + 点击弹出的面板（`mygo.NewFlyout`，无箭头）。列出会话、打开库里的文件、关闭单个/全部会话、打开窗口、退出。面板内容是 `Panel`，可单独用 `ui.NewTester` 测。 |
 | `native/idalib-worker` | C++17 worker。工具实现在 `tools.cpp`。 |
 
 关闭主窗口不退出。菜单栏和 Dock 能把窗口再打开。退出才结束进程，并先让还开着的 worker 收拢数据库。
@@ -54,7 +54,7 @@
 
 Worker 查找：`JIG_IDALIB_WORKER` 优先。安装后的应用用 `Contents/Resources/jig-idalib`（`mygo.json` 的 `resources` 打进包，签名跟着应用走）。否则从可执行文件目录和 cwd 各自起，含自身最多 5 层找 `native/idalib-worker/jig-idalib`，再在这两处旁边找 `jig-idalib`。启动参数：`--center-host` `--center-port` `--path` `--instance-id` `--ida-dir`。`IDADIR` 设为解析后的安装目录（`.app` 落到 `Contents/MacOS`）。
 
-帧：4 字节大端长度 + JSON，上限 64MiB。类型：`hello`、`tool_call`、`tool_result`、`shutdown`。worker 先打开数据库再连 hub，`hello` 带 `target.get_metadata`。`shutdown` 或连接断开后必须 `save_database(..., DBFL_KILL)` 把摊开的 `.id0/.id1/.id2/.nam/.til` 收回 `.i64` 再退出。不要 `Kill`：SIGKILL 会把库留在摊开状态。
+帧：4 字节大端长度 + JSON，上限 64MiB。类型：`hello`、`tool_call`、`tool_result`、`shutdown`。worker 先打开数据库再连 hub，`hello` 带 `target.get_metadata`（含 `fileType`、`processor`、`bitness`、`imageBase`，数据库页的「数据库信息」卡读这些）。`shutdown` 或连接断开后必须 `save_database(..., DBFL_KILL)` 把摊开的 `.id0/.id1/.id2/.nam/.til` 收回 `.i64` 再退出。不要 `Kill`：SIGKILL 会把库留在摊开状态。
 
 MCP 名到 worker 名：
 
@@ -80,11 +80,11 @@ MCP 名到 worker 名：
 
 MyGo `v0.5.2`。内容区 1280×800，最小 1080×680。`TitleBarHidden`，高 `theme.TitleBarH`（42）。系统画交通灯，不画假的。窗口圆角由系统裁切；内容不留第二套外圆角，不留分栏间隙。
 
-左侧导航宽 `theme.NavW`（200），是窗口外框：低透明度罩层，系统磨砂从这里透出。内容区是同一材质、透明度更低的半透明板。卡片再压深一档。不要把外框铺成和内容差不多的实底。没有材质才用实色回退。故障只用氧化红。状态是圆点，字保持浅色。
+左侧导航宽 `theme.NavW`（200），是窗口外框：低透明度罩层，系统磨砂从这里透出。内容区是同一材质、透明度更低的半透明板（`DeskGlass`）。卡片是白 4% 罩层、8% 描边、圆角 16。不要把外框铺成和内容差不多的实底。没有材质才用实色回退。状态是圆点和胶囊，字保持浅色。
 
-三个目的地：数据库、记录、设置。打开的 worker 就在对应文件的详情里，不另开一页。「数据库」是库，不是扩展名过滤。
+三个目的地：数据库、记录、设置。数据库页是列表列（`theme.ListW` 340，搜索、行、拖入提示）+ 详情；记录页是表格 + 右侧详情列（`theme.DetailW` 380，入参/结果）；设置页是三张卡（IDA 安装、本地服务、数据），没有分节导航。打开的 worker 就在对应文件的详情里，不另开一页。打开失败留在该条目上（`Desk.Failure`），详情给「重试」和原因卡，不走全局提示。「数据库」是库，不是扩展名过滤。
 
-颜色只来自 `theme`。深色固定。不用橙色，不用米色。不加工具还没接上的主题开关。
+颜色只来自 `theme`：底 `#10151C`，强调蓝 `Accent`，运行绿 `Live`，故障氧化红 `Fault`，空闲灰 `Idle`，唯一的亮键是白色 `PrimaryButton`。字体 Inter / JetBrains Mono。深色固定。不用橙色，不用米色。不加工具还没接上的主题开关。
 
 UI 字符串中文，短。空态、按钮、错误句保持现有语气。时钟用 `d.Now()`，测试会冻住它。
 
@@ -95,9 +95,10 @@ MyGo 寿命：不把 `ui.Element` 或 parts 存进状态；稳定身份用 `c.Ke
 - 包注释用英文，写清边界（做什么、明确不做什么）。给用户看的错误用中文。
 - `Desk` 是主线程状态。hub、MCP、worker 退出经 `OnChange` → `NotifyUI` 刷新，不直接改 UI。
 - 库的磁盘只在 `desk.Save`。catalog 不自己写文件。
-- 新页面复用 `chrome` 的 Pane / Sidebar / Card / Stage / Status，不新造视觉语言。
+- 新页面复用 `chrome` 的 `Card` / `Facts` / `Pill` / `Button` / `EmptyCard` / `FaultCard`，不新造视觉语言。
+- 从界面挂/卸分析包、关会话后调 `mcp.Server.ToolsChanged`（`Desk` 已封装）。
 - 不给选择器加扩展名过滤器，也不在 Go 里按扩展名拒绝附属文件或改写伴随库。不把零字节、无扩展名、固件、dex、apk 挡在库外。
-- 注释与实现不一致时改注释。`ConduitBridge` 在接通时用 `theme.Live`，不是橙色。
+- 注释与实现不一致时改注释。
 
 ## 验证
 

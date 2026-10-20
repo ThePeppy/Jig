@@ -26,32 +26,40 @@ const (
 	TabSettings
 )
 
-// SettingsSection is the group the settings page shows.
-type SettingsSection int
+// TraceFilter narrows the record list.
+type TraceFilter int
 
 const (
-	SettingsIDA SettingsSection = iota
-	SettingsPorts
-	SettingsAppearance
-	SettingsAgents
+	TraceAll TraceFilter = iota
+	TraceOK
+	TraceFailed
 )
+
+// copyHold is how long a copy key says 已复制.
+const copyHold = 1500 * time.Millisecond
 
 // Desk is main-thread state. Dialog results come back through Take.
 type Desk struct {
-	Tab     Tab
-	Section SettingsSection
+	Tab Tab
 	// SelectedSession focuses a worker that is not the selected catalog entry.
 	SelectedSession string
-	Listening       bool
-	Notice          string
-	IdaDir          string
-	Catalog         *catalog.Catalog
-	Sessions        *session.Manager
-	Traces          *trace.Store
-	Now             func() time.Time
-	RequestAdd      func()
-	RequestIdaDir   func()
-	NotifyUI        func()
+	// Query filters the library list by name and path.
+	Query       string
+	TraceFilter TraceFilter
+	// SelectedTrace is the record the detail column shows.
+	SelectedTrace string
+	Listening     bool
+	Notice        string
+	IdaDir        string
+	Catalog       *catalog.Catalog
+	Sessions      *session.Manager
+	Traces        *trace.Store
+	Now           func() time.Time
+	RequestAdd    func()
+	RequestIdaDir func()
+	// RequestPack asks for a pack.json to attach to the session.
+	RequestPack func(sessionID string)
+	NotifyUI    func()
 	// Post runs fn on the window thread. Nil runs fn on the caller.
 	Post func(func())
 
@@ -60,6 +68,10 @@ type Desk struct {
 	probed    bool
 	mcpSrv    *mcp.Server
 	launching map[string]time.Time
+	failures  map[string]string
+	saving    map[string]bool
+	copiedKey string
+	copiedAt  time.Time
 }
 
 type stored struct {
@@ -167,6 +179,7 @@ func (d *Desk) Take(paths []string, err error) {
 	for _, p := range paths {
 		if aerr := d.AddPath(p); aerr != nil {
 			d.Notice = intake.Message(aerr)
+			d.Tab = TabLibrary
 		}
 	}
 }
@@ -175,9 +188,127 @@ func (d *Desk) Take(paths []string, err error) {
 func (d *Desk) RemoveSelected() {
 	if e, ok := d.Catalog.Selected(); ok {
 		d.Catalog.Remove(e.ID)
+		delete(d.failures, e.ID)
 		_ = d.Save()
 		d.touch()
 	}
+}
+
+// Failure is why the last open of entry id failed, if it did.
+func (d *Desk) Failure(id string) (string, bool) {
+	msg, ok := d.failures[id]
+	return msg, ok
+}
+
+// Dir is the data directory state.json lives in.
+func (d *Desk) Dir() string { return d.dir }
+
+// MarkCopied starts the 已复制 moment for key.
+func (d *Desk) MarkCopied(key string) {
+	d.copiedKey = key
+	d.copiedAt = d.Now()
+}
+
+// CopiedFor is how much longer key says 已复制. Zero when it does not.
+func (d *Desk) CopiedFor(key string) time.Duration {
+	if key == "" || d.copiedKey != key {
+		return 0
+	}
+	if left := copyHold - d.Now().Sub(d.copiedAt); left > 0 {
+		return left
+	}
+	return 0
+}
+
+// Saving reports that a save of session id is still running.
+func (d *Desk) Saving(id string) bool { return d.saving[id] }
+
+// SaveSession saves the session's database off the window thread, then
+// reads its metadata again so the window shows the state after the save.
+func (d *Desk) SaveSession(id string) {
+	if d.saving[id] {
+		return
+	}
+	s, ok := d.Sessions.Get(id)
+	if !ok {
+		return
+	}
+	if d.saving == nil {
+		d.saving = map[string]bool{}
+	}
+	d.saving[id] = true
+	name := s.TargetName
+	d.touch()
+	run := func() {
+		start := time.Now()
+		ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+		defer cancel()
+		_, err := d.Sessions.CallTool(ctx, id, "session.save", map[string]any{})
+		var meta map[string]any
+		if err == nil {
+			if res, merr := d.Sessions.CallTool(ctx, id, "target.get_metadata", map[string]any{}); merr == nil {
+				meta, _ = res.(map[string]any)
+			}
+		}
+		dur := time.Since(start)
+		d.post(func() { d.finishSave(id, name, meta, err, dur) })
+	}
+	if d.Post == nil {
+		run()
+		return
+	}
+	go run()
+}
+
+func (d *Desk) finishSave(id, name string, meta map[string]any, err error, dur time.Duration) {
+	delete(d.saving, id)
+	e := trace.Entry{Function: "session.save", Target: name, Duration: dur, Status: "ok", Summary: "数据库已保存"}
+	if err != nil {
+		e.Status, e.Summary, e.Result = "error", "保存失败: "+err.Error(), err.Error()
+	}
+	d.Traces.Append(e)
+	if s, ok := d.Sessions.Get(id); ok && meta != nil {
+		s.Metadata = meta
+	}
+}
+
+// AttachPack puts pack.json at path on the session.
+func (d *Desk) AttachPack(id, path string) {
+	if _, err := d.Sessions.AttachPack(id, path); err != nil {
+		d.Notice = "挂载失败: " + err.Error()
+		return
+	}
+	d.Notice = ""
+	d.toolsChanged()
+}
+
+// DetachPack takes the pack off the session. Core tools stay.
+func (d *Desk) DetachPack(id string) {
+	if err := d.Sessions.DetachPack(id); err != nil {
+		d.Notice = "卸下失败: " + err.Error()
+		return
+	}
+	d.toolsChanged()
+}
+
+// CloseAll asks every live worker to pack and leave.
+func (d *Desk) CloseAll() {
+	for _, s := range d.Sessions.Sessions() {
+		if s.State == session.StateStopping || s.State == session.StateClosed {
+			continue
+		}
+		if _, ok := d.Sessions.Get(s.ID); !ok {
+			continue
+		}
+		_ = d.CloseSession(s.ID)
+	}
+}
+
+func (d *Desk) toolsChanged() {
+	if d.mcpSrv != nil {
+		d.mcpSrv.ToolsChanged()
+	}
+	d.touch()
 }
 
 // StartSession launches an idalib worker for entry and logs a trace.
@@ -191,6 +322,7 @@ func (d *Desk) StartSession(e catalog.Entry) error {
 		return nil
 	}
 	d.markLaunching(e.ID)
+	delete(d.failures, e.ID)
 	d.Catalog.Select(e.ID)
 	d.Notice = ""
 	d.touch()
@@ -247,8 +379,12 @@ func (d *Desk) finishLaunch(e catalog.Entry, s *session.Session, err error, dur 
 			Duration: dur,
 			Status:   "error",
 			Summary:  "启动失败: " + err.Error(),
+			Result:   err.Error(),
 		})
-		d.Notice = "启动失败: " + err.Error()
+		if d.failures == nil {
+			d.failures = map[string]string{}
+		}
+		d.failures[e.ID] = err.Error()
 		return
 	}
 	d.Traces.Append(trace.Entry{
@@ -313,9 +449,7 @@ func (d *Desk) CloseSession(id string) error {
 		)
 	}
 	d.settleCloseTraces()
-	if d.NotifyUI != nil {
-		d.NotifyUI()
-	}
+	d.toolsChanged()
 	return err
 }
 

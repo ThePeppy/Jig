@@ -86,8 +86,9 @@ func (s *Server) closeSubs() {
 	}
 }
 
-// notifyToolsChanged tells Streamable HTTP clients to re-run tools/list.
-func (s *Server) notifyToolsChanged() {
+// ToolsChanged tells Streamable HTTP clients to re-run tools/list.
+// The window calls it after it attaches, detaches or closes a session.
+func (s *Server) ToolsChanged() {
 	payload, err := json.Marshal(map[string]any{
 		"jsonrpc": "2.0",
 		"method":  "notifications/tools/list_changed",

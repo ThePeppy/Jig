@@ -2,8 +2,10 @@ package appview
 
 import (
 	"image/png"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -13,34 +15,31 @@ import (
 	"jig/internal/desk"
 	"jig/internal/session"
 	"jig/internal/trace"
+	"jig/internal/ui/chrome"
 )
 
 func TestWindowShowsLibraryThenOtherPages(t *testing.T) {
 	d := openDesk(t)
-	d.Now = func() time.Time { return time.Date(2026, 10, 16, 14, 2, 0, 0, time.Local) }
 	tt := ui.NewTester(New(d), 1280, 800)
-	if !tt.HasText("还没有文件") {
+	if !tt.HasText("数据库还是空的") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 	if tt.HasText("重新安装") || tt.HasText("IDA 窗口") {
 		t.Fatalf("old GUI copy leaked: %q", tt.Texts())
 	}
 
-	path := filepath.Join(t.TempDir(), "firmware.bin")
-	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	path := writeFile(t, "firmware.bin")
 	if err := d.AddPath(path); err != nil {
 		t.Fatal(err)
 	}
-	tt = ui.NewTester(New(d), 1280, 800)
-	if !tt.HasText("firmware.bin") || !tt.HasText("未打开") {
+	tt.Frame()
+	if !tt.HasText("firmware.bin") || !tt.HasText("未打开") || !tt.HasText("启动分析") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
-	if err := tt.Click("移出"); err != nil {
+	if err := tt.Click("从数据库移除"); err != nil {
 		t.Fatal(err)
 	}
-	if len(d.Catalog.Entries()) != 0 || !tt.HasText("还没有文件") {
+	if len(d.Catalog.Entries()) != 0 || !tt.HasText("数据库还是空的") {
 		t.Fatalf("entries %d texts %q", len(d.Catalog.Entries()), tt.Texts())
 	}
 
@@ -54,17 +53,14 @@ func TestWindowShowsLibraryThenOtherPages(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(tt.Texts(), "\n")
-	if !strings.Contains(joined, "尚未监听") || strings.Contains(joined, "重新安装") {
+	if !strings.Contains(joined, "尚未监听") || !strings.Contains(joined, "IDA 安装") || strings.Contains(joined, "重新安装") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 }
 
 func TestMissingFileShowsInTheLibrary(t *testing.T) {
 	d := openDesk(t)
-	path := filepath.Join(t.TempDir(), "gone.dex")
-	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	path := writeFile(t, "gone.dex")
 	if err := d.AddPath(path); err != nil {
 		t.Fatal(err)
 	}
@@ -72,10 +68,37 @@ func TestMissingFileShowsInTheLibrary(t *testing.T) {
 		t.Fatal(err)
 	}
 	tt := ui.NewTester(New(d), 1280, 800)
-	if !tt.HasText("文件缺失") || !tt.HasText("gone.dex") {
+	if !tt.HasText("文件缺失") || !tt.HasText("gone.dex") || !tt.HasText("磁盘上已找不到") || tt.HasText("启动分析") {
 		t.Fatalf("texts %q", tt.Texts())
 	}
 }
+
+func TestSearchNarrowsTheList(t *testing.T) {
+	d := openDesk(t)
+	for _, name := range []string{"firmware.bin", "libnet.so"} {
+		if err := d.AddPath(writeFile(t, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tt := ui.NewTester(New(d), 1280, 800)
+	if err := tt.Click("搜索数据库"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Type("libnet")
+	tt.Frame()
+	if _, ok := tt.Find("firmware.bin"); ok {
+		t.Fatalf("filtered row still shown: %q", tt.Texts())
+	}
+	if _, ok := tt.Find("libnet.so"); !ok {
+		t.Fatalf("matching row missing: %q", tt.Texts())
+	}
+	tt.Type("zzz")
+	tt.Frame()
+	if !tt.HasText("没有匹配的文件") {
+		t.Fatalf("no-match line missing: %q", tt.Texts())
+	}
+}
+
 func TestSwitchTabsMultipleTimesAndRender(t *testing.T) {
 	d := openDesk(t)
 	view := New(d)
@@ -92,8 +115,7 @@ func TestSwitchTabsMultipleTimesAndRender(t *testing.T) {
 				tt.Scroll(x, y, 0, 20)
 			}
 		}
-		img := ui.Render(view, 1280, 800, 2)
-		if img == nil {
+		if img := ui.Render(view, 1280, 800, 2); img == nil {
 			t.Fatalf("render returned nil on %s", tabName)
 		}
 	}
@@ -109,35 +131,36 @@ func TestActiveSessionsAndTracesRender(t *testing.T) {
 		PID:          9999,
 		State:        session.StateReady,
 		StartedAt:    time.Now().Add(-5 * time.Minute),
+		Metadata: map[string]any{
+			"fileType": "ELF64 for ARM64", "processor": "arm", "bitness": float64(64),
+			"imageBase": "0x400000", "autoAnalysisComplete": true,
+		},
 	})
-
 	d.Traces.Append(trace.Entry{
-		Function: "session.launch",
+		Function: "ida_decompile",
 		Target:   "active_target.bin",
-		Duration: 15 * time.Millisecond,
+		Duration: 1200 * time.Millisecond,
 		Status:   "ok",
-		Summary:  "Worker 已就绪 (PID: 9999)",
+		Args:     `{"address": "0x401a30"}`,
+		Result:   "int sub_401a30(int a1)",
 	})
 
 	view := New(d)
 	tt := ui.NewTester(view, 1280, 800)
 	tt.SetTitleBar(ui.TitleBar{Height: 44, Left: 84, Right: 14})
-
-	if !tt.HasText("active_target.bin") || !tt.HasText("就绪") || !tt.HasText("9999") || !tt.HasText("关闭会话") {
-		t.Fatalf("library texts missing: %q", tt.Texts())
-	}
-	if tt.HasText("查看会话") {
-		t.Fatal("sessions jump still present")
-	}
-	if err := tt.Click("会话"); err == nil {
-		t.Fatal("sessions tab still present")
+	for _, want := range []string{"active_target.bin", "分析会话运行中", "关闭会话", "ARM · 64 位", "0x400000", "已完成", chrome.MCPURL, "未挂载", "ida_decompile"} {
+		if !tt.HasText(want) {
+			t.Fatalf("library missing %q: %q", want, tt.Texts())
+		}
 	}
 
 	if err := tt.Click("记录"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("session.launch") || !tt.HasText("调用审计记录") {
-		t.Fatalf("trace texts missing: %q", tt.Texts())
+	for _, want := range []string{"1.2 秒", "入参", "0x401a30", "int sub_401a30"} {
+		if !tt.HasText(want) {
+			t.Fatalf("record missing %q: %q", want, tt.Texts())
+		}
 	}
 	if err := tt.Click("数据库"); err != nil {
 		t.Fatal(err)
@@ -150,137 +173,71 @@ func TestActiveSessionsAndTracesRender(t *testing.T) {
 	}
 }
 
-func TestRenderAllStudioScreens(t *testing.T) {
-	outDir := os.Getenv("JIG_RENDER_DIR")
-	savePNG := func(name string, view func(*ui.Context)) {
-		tt := ui.NewTester(view, 1280, 800)
-		tt.SetTitleBar(ui.TitleBar{Height: 44, Left: 84, Right: 14})
-		tt.SetScale(2)
-		tt.SetVibrancy(true)
-		img := tt.Image()
-		if img == nil {
-			t.Fatalf("nil render for %s", name)
-		}
-		if outDir == "" {
-			return
-		}
-		f, err := os.Create(filepath.Join(outDir, name))
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer f.Close()
-		if err := png.Encode(f, img); err != nil {
-			t.Fatal(err)
-		}
-	}
-
+func TestRecordFilterAndSelection(t *testing.T) {
 	d := openDesk(t)
-	d.Now = func() time.Time { return time.Date(2026, 10, 16, 14, 28, 36, 0, time.Local) }
-	view := New(d)
-
-	// 1. Empty Library
-	savePNG("jig_ui_1_lib_empty.png", view)
-
-	// 2. Populated library, two live sessions, one missing file.
-	dir := t.TempDir()
-	bin1 := filepath.Join(dir, "libil2cpp-arm64.so")
-	db1 := filepath.Join(dir, "libil2cpp-arm64.i64")
-	bin2 := filepath.Join(dir, "bootloader_v4.bin")
-	bin3 := filepath.Join(dir, "kernel_cache.macho")
-	gone := filepath.Join(dir, "legacy_driver.sys")
-	_ = os.WriteFile(bin1, make([]byte, 48200), 0o644)
-	_ = os.WriteFile(db1, make([]byte, 192400), 0o644)
-	_ = os.WriteFile(bin2, make([]byte, 16384), 0o644)
-	_ = os.WriteFile(bin3, make([]byte, 81920), 0o644)
-	_ = os.WriteFile(gone, []byte{1, 2, 3}, 0o644)
-
-	_ = d.AddPath(bin1)
-	_ = d.AddPath(bin2)
-	_ = d.AddPath(bin3)
-	_ = d.AddPath(gone)
-	_ = os.Remove(gone)
-	d.Catalog.Select("1")
-
-	d.Sessions.Register(&session.Session{
-		ID:           "s-7f9a02",
-		TargetName:   "libil2cpp-arm64.so",
-		SourcePath:   bin1,
-		DatabasePath: db1,
-		PID:          48210,
-		State:        session.StateReady,
-		StartedAt:    time.Now().Add(-12*time.Minute - 34*time.Second),
-	})
-	d.Sessions.Register(&session.Session{
-		ID:           "s-3c11b8",
-		TargetName:   "bootloader_v4.bin",
-		SourcePath:   bin2,
-		DatabasePath: bin2,
-		PID:          48305,
-		State:        session.StateReady,
-		StartedAt:    time.Now().Add(-3*time.Minute - 18*time.Second),
-	})
-
-	d.Traces.Append(trace.Entry{
-		Timestamp: time.Date(2026, 10, 16, 14, 26, 10, 0, time.Local),
-		Function:  "session.launch",
-		Target:    "libil2cpp-arm64.so",
-		Duration:  420 * time.Millisecond,
-		Status:    "ok",
-		Summary:   "Worker 已就绪 (PID: 48210)",
-	})
-	d.Traces.Append(trace.Entry{
-		Timestamp: time.Date(2026, 10, 16, 14, 27, 4, 0, time.Local),
-		Function:  "ida_list_functions",
-		Target:    "libil2cpp-arm64.so",
-		Duration:  38 * time.Millisecond,
-		Status:    "ok",
-		Summary:   "返回 14,280 个符号条目 (page 1/29)",
-	})
-	d.Traces.Append(trace.Entry{
-		Timestamp: time.Date(2026, 10, 16, 14, 27, 19, 0, time.Local),
-		Function:  "ida_decompile",
-		Target:    "libil2cpp-arm64.so",
-		Duration:  84 * time.Millisecond,
-		Status:    "ok",
-		Summary:   "sub_18004A2C0 @ 0x18004A2C0 · 生成 68 行伪代码",
-	})
-	d.Traces.Append(trace.Entry{
-		Timestamp: time.Date(2026, 10, 16, 14, 28, 12, 0, time.Local),
-		Function:  "ida_xrefs",
-		Target:    "bootloader_v4.bin",
-		Duration:  12 * time.Millisecond,
-		Status:    "ok",
-		Summary:   "命中 9 处交叉引用 → rom_verify_sig",
-	})
-
-	d.Tab = desk.TabLibrary
-	savePNG("jig_ui_2_lib_populated.png", view)
-	d.Catalog.Select("3")
-	savePNG("jig_ui_2b_lib_unopened.png", view)
-	d.Catalog.Select("1")
-
+	d.Traces.Append(trace.Entry{Function: "ida_xrefs", Target: "a.bin", Status: "ok", Args: `{"address": "0x10"}`})
+	d.Traces.Append(trace.Entry{Function: "ida_get_function", Target: "a.bin", Status: "error", Result: "not in a function: 0x20"})
 	d.Tab = desk.TabTrace
-	savePNG("jig_ui_4_trace_active.png", view)
+	tt := ui.NewTester(New(d), 1280, 800)
+	if !tt.HasText("not in a function") {
+		t.Fatalf("newest record not selected: %q", tt.Texts())
+	}
+	if err := tt.Click("成功"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tt.Find("ida_get_function"); ok {
+		t.Fatalf("failed call shown under 成功: %q", tt.Texts())
+	}
+	if !tt.HasText(`"address": "0x10"`) {
+		t.Fatalf("detail did not follow the filter: %q", tt.Texts())
+	}
+	if err := tt.Click("全部"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.Click("ida_xrefs"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText(`"address": "0x10"`) || tt.HasText("not in a function") {
+		t.Fatalf("selection did not move: %q", tt.Texts())
+	}
+	if err := tt.Click("清空"); err != nil {
+		t.Fatal(err)
+	}
+	if !tt.HasText("还没有调用") {
+		t.Fatalf("clear left records: %q", tt.Texts())
+	}
+}
 
+func TestSettingsCopyAndReveal(t *testing.T) {
+	d := openDesk(t)
+	now := time.Date(2026, 10, 20, 13, 0, 0, 0, time.Local)
+	d.Now = func() time.Time { return now }
 	d.Tab = desk.TabSettings
-	d.Section = desk.SettingsIDA
-	savePNG("jig_ui_5_settings_ida.png", view)
-
-	d.Section = desk.SettingsAgents
-	savePNG("jig_ui_6_settings_agent.png", view)
+	tt := ui.NewTester(New(d), 1280, 800)
+	if err := tt.Click("复制地址"); err != nil {
+		t.Fatal(err)
+	}
+	if tt.Clipboard() != chrome.MCPURL || !tt.HasText("已复制") {
+		t.Fatalf("clipboard %q texts %q", tt.Clipboard(), tt.Texts())
+	}
+	now = now.Add(2 * time.Second)
+	tt.Frame()
+	if tt.HasText("已复制") {
+		t.Fatal("copy note did not clear")
+	}
+	if err := tt.Click("在访达中显示"); err != nil {
+		t.Fatal(err)
+	}
+	want := (&url.URL{Scheme: "file", Path: d.Dir()}).String()
+	if !slices.Contains(tt.OpenedURLs(), want) {
+		t.Fatalf("opened %q want %q", tt.OpenedURLs(), want)
+	}
 }
 
 func TestCatalogFileShowsItsWorker(t *testing.T) {
 	d := openDesk(t)
-	dir := t.TempDir()
-	openPath := filepath.Join(dir, "firmware.bin")
-	idlePath := filepath.Join(dir, "idle.bin")
-	if err := os.WriteFile(openPath, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(idlePath, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	openPath := writeFile(t, "firmware.bin")
+	idlePath := writeFile(t, "idle.bin")
 	if err := d.AddPath(openPath); err != nil {
 		t.Fatal(err)
 	}
@@ -301,7 +258,7 @@ func TestCatalogFileShowsItsWorker(t *testing.T) {
 	if err := tt.Click("firmware.bin"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("就绪") || !tt.HasText("42") || !tt.HasText("关闭会话") || tt.HasText("启动分析") {
+	if !tt.HasText("分析会话运行中") || !tt.HasText("保存") || tt.HasText("启动分析") {
 		t.Fatalf("open file texts %q", tt.Texts())
 	}
 	if err := tt.Click("idle.bin"); err != nil {
@@ -312,41 +269,46 @@ func TestCatalogFileShowsItsWorker(t *testing.T) {
 	}
 }
 
-func TestCallLogDoesNotOverlapThePathCard(t *testing.T) {
+func TestPackAttachedShowsAndDetaches(t *testing.T) {
 	d := openDesk(t)
-	path := filepath.Join(t.TempDir(), "firmware.bin")
-	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	path := writeFile(t, "firmware.bin")
 	if err := d.AddPath(path); err != nil {
 		t.Fatal(err)
 	}
-	d.Traces.Append(trace.Entry{
-		Function: "session.launch",
-		Target:   "firmware.bin",
-		Duration: 1660 * time.Millisecond,
-		Status:   "ok",
-		Summary:  "Worker 已就绪 (PID: 92430)",
-	})
-
-	tt := ui.NewTester(New(d), 1280, 800)
-	pathBox, ok := tt.Find("路径")
-	kicker, okKicker := tt.Find("这次打开以来")
-	if !ok || !okKicker {
-		t.Fatalf("path %v kicker %v texts %q", ok, okKicker, tt.Texts())
+	d.Sessions.Register(&session.Session{ID: "s-pack", TargetName: "firmware.bin", SourcePath: path, State: session.StateReady})
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "codec.tsv"), []byte("category\tpacket_id\tpacket_name\thandler_va\tfield_index\tdepth\treader\tsize\tcall_va\treader_va\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if pathBox.Y+pathBox.H > kicker.Y+0.5 {
-		t.Fatalf("path card overlaps call log: path %v kicker %v", pathBox, kicker)
+	if err := os.WriteFile(filepath.Join(dir, "pack.json"), []byte(`{"id":"p","tools":[{"name":"ida_p_fields","kind":"fields_from_calls","config":{"codec":"codec.tsv"}}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	asked := ""
+	d.RequestPack = func(id string) { asked = id }
+	tt := ui.NewTester(New(d), 1280, 800)
+	if err := tt.Click("挂载"); err != nil {
+		t.Fatal(err)
+	}
+	if asked != "s-pack" {
+		t.Fatalf("pack picker asked for %q", asked)
+	}
+	d.AttachPack(asked, dir)
+	tt.Frame()
+	if !tt.HasText("已挂载") || !tt.HasText("pack.json") || !tt.HasText("fields_from_calls") {
+		t.Fatalf("attached pack missing: %q", tt.Texts())
+	}
+	if err := tt.Click("卸下"); err != nil {
+		t.Fatal(err)
+	}
+	if d.Sessions.PackOf("s-pack") != nil || !tt.HasText("未挂载") {
+		t.Fatalf("detach did not take: %q", tt.Texts())
 	}
 }
 
-func TestStartShowsTheLaunchBeforeTheWorkerReturns(t *testing.T) {
+func TestStartFailureOffersRetry(t *testing.T) {
 	d := openDesk(t)
-	path := filepath.Join(t.TempDir(), "firmware.bin")
-	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := d.AddPath(path); err != nil {
+	t.Setenv("JIG_IDALIB_WORKER", filepath.Join(t.TempDir(), "missing-worker"))
+	if err := d.AddPath(writeFile(t, "firmware.bin")); err != nil {
 		t.Fatal(err)
 	}
 	got := make(chan func(), 1)
@@ -356,10 +318,9 @@ func TestStartShowsTheLaunchBeforeTheWorkerReturns(t *testing.T) {
 	if err := tt.Click("启动分析"); err != nil {
 		t.Fatal(err)
 	}
-	if !tt.HasText("启动中") || !tt.HasText("正在拉起 worker") || !tt.HasText("拉起") {
-		t.Fatalf("launch process missing: %q", tt.Texts())
+	if !tt.HasText("启动中") || !tt.HasText("正在拉起 worker") {
+		t.Fatalf("launch progress missing: %q", tt.Texts())
 	}
-
 	select {
 	case fn := <-got:
 		fn()
@@ -367,29 +328,25 @@ func TestStartShowsTheLaunchBeforeTheWorkerReturns(t *testing.T) {
 		t.Fatal("launch did not finish")
 	}
 	tt.Frame()
-	if !tt.HasText("启动失败") {
+	if !tt.HasText("打开失败") || !tt.HasText("原因") || !tt.HasText("missing-worker") || !tt.HasText("重试") {
 		t.Fatalf("failure missing: %q", tt.Texts())
 	}
+	if err := tt.Click("重试"); err != nil {
+		t.Fatal(err)
+	}
+	if tt.HasText("打开失败") || !tt.HasText("启动中") {
+		t.Fatalf("retry did not restart: %q", tt.Texts())
+	}
+	(<-got)()
 }
 
 func TestStoppingSessionShowsThePack(t *testing.T) {
 	d := openDesk(t)
-	path := filepath.Join(t.TempDir(), "firmware.bin")
-	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	path := writeFile(t, "firmware.bin")
 	if err := d.AddPath(path); err != nil {
 		t.Fatal(err)
 	}
-	d.Sessions.Register(&session.Session{
-		ID:           "s-stop",
-		TargetName:   "firmware.bin",
-		SourcePath:   path,
-		DatabasePath: path,
-		PID:          42,
-		State:        session.StateStopping,
-		StartedAt:    time.Now().Add(-time.Minute),
-	})
+	d.Sessions.Register(&session.Session{ID: "s-stop", TargetName: "firmware.bin", SourcePath: path, DatabasePath: path, PID: 42, State: session.StateStopping})
 	tt := ui.NewTester(New(d), 1280, 800)
 	if !tt.HasText("关闭中") || !tt.HasText("正在收拢数据库") || tt.HasText("关闭会话") {
 		t.Fatalf("close process missing: %q", tt.Texts())
@@ -398,83 +355,42 @@ func TestStoppingSessionShowsThePack(t *testing.T) {
 
 func TestLaunchingSessionShowsTheOpenStep(t *testing.T) {
 	d := openDesk(t)
-	path := filepath.Join(t.TempDir(), "firmware.bin")
-	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	path := writeFile(t, "firmware.bin")
 	if err := d.AddPath(path); err != nil {
 		t.Fatal(err)
 	}
-	d.Sessions.Register(&session.Session{
-		ID:           "s-open",
-		TargetName:   "firmware.bin",
-		SourcePath:   path,
-		DatabasePath: path,
-		PID:          77,
-		State:        session.StateLaunching,
-		StartedAt:    time.Now(),
-	})
+	d.Sessions.Register(&session.Session{ID: "s-open", TargetName: "firmware.bin", SourcePath: path, DatabasePath: path, PID: 77, State: session.StateLaunching, StartedAt: time.Now()})
 	tt := ui.NewTester(New(d), 1280, 800)
 	if !tt.HasText("启动中") || !tt.HasText("正在打开数据库") {
 		t.Fatalf("open step missing: %q", tt.Texts())
 	}
 }
 
-func TestCloseClearsTheReadyStrip(t *testing.T) {
+func TestCloseClearsTheReadyState(t *testing.T) {
 	d := openDesk(t)
-	path := filepath.Join(t.TempDir(), "firmware.bin")
-	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	path := writeFile(t, "firmware.bin")
 	if err := d.AddPath(path); err != nil {
 		t.Fatal(err)
 	}
-	d.Sessions.Register(&session.Session{
-		ID:           "s-ready",
-		TargetName:   "firmware.bin",
-		SourcePath:   path,
-		DatabasePath: path,
-		PID:          951149,
-		State:        session.StateReady,
-		StartedAt:    time.Now().Add(-time.Minute),
-	})
-	d.Sessions.Register(&session.Session{
-		ID:           "s-other",
-		TargetName:   "firmware.bin",
-		SourcePath:   path,
-		DatabasePath: path,
-		PID:          951106,
-		State:        session.StateReady,
-		StartedAt:    time.Now().Add(-time.Minute),
-	})
-	d.Traces.Append(trace.Entry{
-		Function: "session.launch",
-		Target:   "firmware.bin",
-		Status:   "ok",
-		Summary:  "Worker 已就绪 (PID: 951149)",
-	})
-	d.Traces.Append(trace.Entry{
-		Function: "session.launch",
-		Target:   "firmware.bin",
-		Status:   "ok",
-		Summary:  "Worker 已就绪 (PID: 951106)",
-	})
-
+	for _, id := range []string{"s-ready", "s-other"} {
+		d.Sessions.Register(&session.Session{ID: id, TargetName: "firmware.bin", SourcePath: path, DatabasePath: path, PID: 951149, State: session.StateReady})
+	}
 	tt := ui.NewTester(New(d), 1280, 800)
 	if err := tt.Click("关闭会话"); err != nil {
 		t.Fatal(err)
 	}
 	tt.Frame()
-	if tt.HasText("就绪") || tt.HasText("Worker 已就绪") || tt.HasText("关闭会话") {
-		t.Fatalf("ready status stuck: %q", tt.Texts())
-	}
-	if !tt.HasText("未打开") || !tt.HasText("session.close") || !tt.HasText("数据库已收拢") || tt.HasText("正在收拢数据库") || !tt.HasText("Worker 已关闭 (PID: 951149)") || !tt.HasText("Worker 已关闭 (PID: 951106)") {
-		t.Fatalf("close did not reach the log: %q", tt.Texts())
+	if tt.HasText("分析会话运行中") || tt.HasText("关闭会话") || !tt.HasText("未打开") || !tt.HasText("session.close") {
+		t.Fatalf("ready state stuck: %q", tt.Texts())
 	}
 	if len(d.Sessions.Sessions()) != 0 {
 		t.Fatalf("sessions still live: %d", len(d.Sessions.Sessions()))
 	}
+	if got := d.Traces.Entries()[0]; got.Function != "session.close" || got.Summary != "数据库已收拢" {
+		t.Fatalf("close record %+v", got)
+	}
 }
+
 func TestRailFrostStaysClearerThanTheDesk(t *testing.T) {
 	d := openDesk(t)
 	tt := ui.NewTester(New(d), 1280, 800)
@@ -483,10 +399,91 @@ func TestRailFrostStaysClearerThanTheDesk(t *testing.T) {
 	img := tt.Image()
 	// Away from labels and the hairline. The rail is 200 DIP wide.
 	rail := img.RGBAAt(40, 520)
-	desk := img.RGBAAt(640, 520)
+	desk := img.RGBAAt(640, 120)
 	if int(desk.A) < int(rail.A)+80 {
 		t.Fatalf("rail %v is not clearly more transparent than the desk %v", rail, desk)
 	}
+}
+
+// TestRenderScreens writes the design boards as PNGs when JIG_RENDER_DIR is set.
+func TestRenderScreens(t *testing.T) {
+	outDir := os.Getenv("JIG_RENDER_DIR")
+	save := func(name string, view func(*ui.Context)) {
+		tt := ui.NewTester(view, 1280, 800)
+		tt.SetTitleBar(ui.TitleBar{Height: 42, Left: 84, Right: 14})
+		tt.SetScale(2)
+		img := tt.Image()
+		if img == nil {
+			t.Fatalf("nil render for %s", name)
+		}
+		if outDir == "" {
+			return
+		}
+		f, err := os.Create(filepath.Join(outDir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer f.Close()
+		if err := png.Encode(f, img); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	d := openDesk(t)
+	now := time.Date(2026, 10, 20, 14, 28, 36, 0, time.Local)
+	d.Now = func() time.Time { return now }
+	d.Listening = true
+	view := New(d)
+	save("jig_empty.png", view)
+
+	dir := t.TempDir()
+	firmware := filepath.Join(dir, "firmware_v2.bin")
+	libnet := filepath.Join(dir, "libnet.so")
+	helper := filepath.Join(dir, "HelperTool")
+	dex := filepath.Join(dir, "classes.dex")
+	for _, p := range []string{firmware, libnet, helper, dex} {
+		_ = os.WriteFile(p, make([]byte, 48200), 0o644)
+		_ = d.AddPath(p)
+	}
+	d.Sessions.Register(&session.Session{
+		ID: "s-7f9a02", TargetName: "firmware_v2.bin", SourcePath: firmware, DatabasePath: firmware + ".i64",
+		PID: 48210, State: session.StateReady,
+		Metadata: map[string]any{
+			"fileType": "ELF 64 位", "processor": "arm", "bitness": float64(64),
+			"imageBase": "0x400000", "autoAnalysisComplete": true,
+		},
+	})
+	d.Sessions.Register(&session.Session{ID: "s-3c11b8", TargetName: "libnet.so", SourcePath: libnet, PID: 48305, State: session.StateReady})
+	for i, e := range []trace.Entry{
+		{Function: "ida_open", Target: "firmware_v2.bin", Duration: 4800 * time.Millisecond, Args: "{\n  \"path\": \"~/Samples/firmware_v2.bin\"\n}"},
+		{Function: "ida_list_functions", Target: "firmware_v2.bin", Duration: 400 * time.Millisecond},
+		{Function: "ida_get_function", Target: "libnet.so", Duration: 60 * time.Second, Status: "error", Result: "worker 调用超时"},
+		{Function: "ida_rename", Target: "libnet.so", Duration: 100 * time.Millisecond},
+		{Function: "ida_xrefs", Target: "firmware_v2.bin", Duration: 300 * time.Millisecond},
+		{Function: "ida_decompile", Target: "firmware_v2.bin", Duration: 1200 * time.Millisecond,
+			Args: "{\n  \"address\": \"0x401a30\",\n  \"create\": false\n}", Result: "int sub_401a30(int a1)\n{\n  return a1 + 1;\n}"},
+	} {
+		e.Timestamp = now.Add(-[]time.Duration{12, 9, 6, 3, 1, 0}[i] * time.Minute)
+		if e.Status == "" {
+			e.Status = "ok"
+		}
+		d.Traces.Append(e)
+	}
+	d.Catalog.Select("1")
+	save("jig_library.png", view)
+
+	d.Catalog.Select("3")
+	save("jig_library_idle.png", view)
+
+	t.Setenv("JIG_IDALIB_WORKER", filepath.Join(dir, "missing-worker"))
+	_ = d.StartSession(d.Catalog.Entries()[3])
+	save("jig_library_failed.png", view)
+
+	d.Tab = desk.TabTrace
+	save("jig_trace.png", view)
+
+	d.Tab = desk.TabSettings
+	save("jig_settings.png", view)
 }
 
 func openDesk(t *testing.T) *desk.Desk {
@@ -496,4 +493,13 @@ func openDesk(t *testing.T) *desk.Desk {
 		t.Fatal(err)
 	}
 	return d
+}
+
+func writeFile(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, []byte{1}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
 }

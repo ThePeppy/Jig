@@ -2,6 +2,7 @@
 package mcp
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -170,20 +171,36 @@ func (s *Server) callTool(ctx context.Context, params map[string]any) map[string
 	out, target, err := s.dispatchTool(ctx, name, args)
 	dur := time.Since(start)
 
+	var text string
+	if err != nil {
+		text = err.Error()
+	} else {
+		b, _ := json.MarshalIndent(out, "", "  ")
+		text = string(b)
+	}
+
 	if s.Traces != nil {
 		status := "ok"
-		summary := "执行完成"
+		summary := text
 		if err != nil {
 			status = "error"
-			summary = err.Error()
-		} else if b, jerr := json.Marshal(out); jerr == nil {
-			summary = string(b)
+		} else {
+			var compact bytes.Buffer
+			if json.Compact(&compact, []byte(text)) == nil {
+				summary = compact.String()
+			}
 			if len(summary) > 120 {
 				summary = summary[:120] + "..."
 			}
 		}
 		if target == "" {
 			target = "local"
+		}
+		var argText string
+		if len(args) > 0 {
+			if b, jerr := json.MarshalIndent(args, "", "  "); jerr == nil {
+				argText = trace.Clip(string(b))
+			}
 		}
 		s.Traces.Append(trace.Entry{
 			Timestamp: time.Now(),
@@ -192,26 +209,18 @@ func (s *Server) callTool(ctx context.Context, params map[string]any) map[string
 			Duration:  dur,
 			Status:    status,
 			Summary:   summary,
+			Args:      argText,
+			Result:    trace.Clip(text),
 		})
 		if s.OnChange != nil {
 			s.OnChange()
 		}
 	}
 
-	if err != nil {
-		return map[string]any{
-			"isError": true,
-			"content": []map[string]any{
-				{"type": "text", "text": err.Error()},
-			},
-		}
-	}
-
-	b, _ := json.MarshalIndent(out, "", "  ")
 	return map[string]any{
-		"isError": false,
+		"isError": err != nil,
 		"content": []map[string]any{
-			{"type": "text", "text": string(b)},
+			{"type": "text", "text": text},
 		},
 	}
 }
@@ -264,7 +273,7 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args map[string]
 			} else {
 				out["packId"] = p.ID
 				out["packPath"] = p.Path
-				s.notifyToolsChanged()
+				s.ToolsChanged()
 			}
 		}
 		return out, decision.Name, nil
@@ -275,7 +284,7 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args map[string]
 		}
 		err := s.Sessions.Close(instanceID)
 		if err == nil {
-			s.notifyToolsChanged()
+			s.ToolsChanged()
 		}
 		return map[string]any{"ok": err == nil, "instanceId": instanceID}, instanceID, err
 
@@ -285,13 +294,13 @@ func (s *Server) dispatchTool(ctx context.Context, name string, args map[string]
 		if err != nil {
 			return nil, instanceID, err
 		}
-		s.notifyToolsChanged()
+		s.ToolsChanged()
 		return map[string]any{"ok": true, "packId": p.ID, "packPath": p.Path, "instanceId": instanceID}, instanceID, nil
 
 	case "ida_detach_pack":
 		err := s.Sessions.DetachPack(instanceID)
 		if err == nil {
-			s.notifyToolsChanged()
+			s.ToolsChanged()
 		}
 		return map[string]any{"ok": err == nil, "instanceId": instanceID}, instanceID, err
 	}

@@ -4,17 +4,20 @@ import (
 	"runtime"
 
 	"github.com/egoist/mygo"
+	"github.com/egoist/mygo/ui"
 
 	"jig/internal/desk"
 	"jig/internal/product"
 )
 
-// Bar is the menu-bar status item. Refresh rebuilds it from desk.
+// Bar is the menu-bar status item. A click opens the panel under it; a
+// second click, Escape or a click elsewhere closes it.
 type Bar struct {
-	d    *desk.Desk
-	show func()
-	quit func()
-	tray *mygo.Tray
+	d     *desk.Desk
+	show  func()
+	quit  func()
+	tray  *mygo.Tray
+	panel *mygo.Window
 }
 
 // Open adds the status item. Call it once the app is ready.
@@ -29,51 +32,63 @@ func Open(d *desk.Desk, show, quit func()) (*Bar, error) {
 		return nil, err
 	}
 	b := &Bar{d: d, show: show, quit: quit, tray: tray}
-	b.Refresh()
+	tray.OnClick(b.toggle)
 	return b, nil
 }
 
-// Refresh rebuilds the menu and the count beside the icon.
+func (b *Bar) toggle() {
+	if b.panel != nil {
+		b.panel.Close()
+		return
+	}
+	w := mygo.NewFlyout(mygo.FlyoutOptions{
+		Tray:      b.tray,
+		Placement: mygo.PlacementBottom,
+		Gap:       6,
+		Width:     PanelW,
+		Height:    PanelHeight(b.d),
+		Focusable: true,
+		Shadow:    true,
+		Content: ui.View(Panel(b.d, Actions{
+			Show:    b.show,
+			Quit:    b.quit,
+			Dismiss: b.dismiss,
+		})),
+	})
+	b.panel = w
+	w.OnClosed(func() {
+		if b.panel == w {
+			b.panel = nil
+		}
+	})
+}
+
+func (b *Bar) dismiss() {
+	if b.panel != nil {
+		b.panel.Close()
+	}
+}
+
+// Refresh redraws an open panel at the height its rows need.
 func (b *Bar) Refresh() {
-	if b == nil || b.tray == nil {
+	if b == nil {
 		return
 	}
-	mygo.RunOnMain(b.refresh)
+	mygo.RunOnMain(func() {
+		if b.panel == nil || b.panel.IsDestroyed() {
+			return
+		}
+		b.panel.SetContentSize(PanelW, PanelHeight(b.d))
+		b.panel.Invalidate()
+	})
 }
 
-func (b *Bar) refresh() {
-	if b.tray == nil {
-		return
-	}
-	b.tray.SetTitle(Title(b.d))
-	b.tray.SetMenu(mygo.NewMenu(menuItems(Items(b.d, b.show, b.quit))))
-}
-
-// Close removes the status item.
+// Close removes the status item and its panel.
 func (b *Bar) Close() {
 	if b == nil || b.tray == nil {
 		return
 	}
+	b.dismiss()
 	b.tray.Destroy()
 	b.tray = nil
-}
-
-func menuItems(items []Item) []*mygo.MenuItem {
-	out := make([]*mygo.MenuItem, 0, len(items))
-	for _, it := range items {
-		if it.Separator {
-			out = append(out, mygo.Separator())
-			continue
-		}
-		row := &mygo.MenuItem{ID: it.ID, Label: it.Label, Disabled: it.Disabled}
-		if len(it.Children) > 0 {
-			row.Submenu = menuItems(it.Children)
-		}
-		if it.Run != nil {
-			fn := it.Run
-			row.Click = func(*mygo.MenuItem, *mygo.Window) { fn() }
-		}
-		out = append(out, row)
-	}
-	return out
 }

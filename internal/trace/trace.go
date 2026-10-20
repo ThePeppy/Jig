@@ -1,10 +1,18 @@
-// Package trace manages the telemetry and audit trail of MCP tool calls and worker operations.
+// Package trace keeps the in-memory record of MCP tool calls and worker
+// operations. It does not write to disk and does not format for a window
+// beyond the duration label.
 package trace
 
 import (
+	"fmt"
+	"strconv"
 	"sync"
 	"time"
+	"unicode/utf8"
 )
+
+// DetailLimit bounds the arguments and result one entry keeps.
+const DetailLimit = 64 << 10
 
 // Entry records one operation or tool execution.
 type Entry struct {
@@ -15,45 +23,76 @@ type Entry struct {
 	Duration  time.Duration `json:"duration"`
 	Status    string        `json:"status"` // "ok", "error", "running"
 	Summary   string        `json:"summary"`
+	// Args is the call's input as indented JSON, empty when it had none.
+	Args string `json:"args,omitempty"`
+	// Result is what the call returned, or the error text.
+	Result string `json:"result,omitempty"`
 }
 
-// FormatDuration returns a clean human-readable latency string.
+// Failed reports an entry that ended in an error.
+func (e Entry) Failed() bool { return e.Status == "error" }
+
+// FormatDuration is the latency as a list shows it.
 func (e Entry) FormatDuration() string {
-	if e.Duration < time.Millisecond {
-		return e.Duration.Round(time.Microsecond).String()
+	d := e.Duration
+	switch {
+	case d < 100*time.Millisecond:
+		return fmt.Sprintf("%d 毫秒", d.Milliseconds())
+	case d < 10*time.Second:
+		return fmt.Sprintf("%.1f 秒", d.Seconds())
+	default:
+		return fmt.Sprintf("%d 秒", int(d.Round(time.Second).Seconds()))
 	}
-	if e.Duration < time.Second {
-		return e.Duration.Round(time.Millisecond).String()
-	}
-	return e.Duration.Round(10 * time.Millisecond).String()
 }
 
-// Store holds the in-memory circular trace log buffer.
+// Clip cuts s to DetailLimit bytes on a rune boundary.
+func Clip(s string) string {
+	if len(s) <= DetailLimit {
+		return s
+	}
+	cut := DetailLimit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut] + "\n…"
+}
+
+// Store holds the in-memory ring of entries, newest first.
 type Store struct {
 	mu      sync.Mutex
 	entries []Entry
 	max     int
+	seq     uint64
 }
 
-// NewStore creates a new trace store.
+// NewStore creates a store keeping at most maxEntries.
 func NewStore(maxEntries int) *Store {
 	if maxEntries <= 0 {
 		maxEntries = 200
 	}
 	return &Store{
-		entries: make([]Entry, 0, maxEntries),
+		entries: make([]Entry, 0, maxEntries+1),
 		max:     maxEntries,
 	}
 }
 
-// Append adds a new log entry to the front of the list.
+// Max is how many entries the store keeps.
+func (s *Store) Max() int { return s.max }
+
+// Append adds e to the front and gives it an ID when it has none.
 func (s *Store) Append(e Entry) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if e.Timestamp.IsZero() {
 		e.Timestamp = time.Now()
 	}
-	s.entries = append([]Entry{e}, s.entries...)
+	if e.ID == "" {
+		s.seq++
+		e.ID = strconv.FormatUint(s.seq, 10)
+	}
+	s.entries = append(s.entries, Entry{})
+	copy(s.entries[1:], s.entries)
+	s.entries[0] = e
 	if len(s.entries) > s.max {
 		s.entries = s.entries[:s.max]
 	}
@@ -89,7 +128,7 @@ func (s *Store) Update(match func(Entry) bool, update func(*Entry)) {
 	}
 }
 
-// Entries returns a copy of current recorded operations.
+// Entries returns a copy of the current entries, newest first.
 func (s *Store) Entries() []Entry {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,9 +137,10 @@ func (s *Store) Entries() []Entry {
 	return res
 }
 
-// Clear drops all logs.
+// Clear drops all entries.
 func (s *Store) Clear() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	clear(s.entries)
 	s.entries = s.entries[:0]
 }

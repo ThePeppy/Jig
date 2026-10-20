@@ -88,7 +88,7 @@ func (s *shell) show() {
 		UseContentSize:       true,
 		TitleBarStyle:        mygo.TitleBarHidden,
 		TitleBarHeight:       theme.TitleBarH,
-		TrafficLightPosition: &mygo.Point{X: 12, Y: 14},
+		TrafficLightPosition: &mygo.Point{X: 18, Y: 15},
 		// Under-window blur is the ground. The rail tints it lightly.
 		Vibrancy:        mygo.VibrancyUnderWindow,
 		BackgroundColor: theme.WindowHex,
@@ -98,6 +98,7 @@ func (s *shell) show() {
 	s.w = w
 	s.d.RequestAdd = func() { pickFiles(w, s.d) }
 	s.d.RequestIdaDir = func() { pickIdaDir(w, s.d) }
+	s.d.RequestPack = func(id string) { pickPack(w, s.d, id) }
 	w.OnFileDrop(func(e *mygo.FileDropEvent) {
 		paths := append([]string(nil), e.Paths...)
 		w.Update(func() { s.d.Take(paths, nil) })
@@ -176,6 +177,23 @@ func pickIdaDir(w *mygo.Window, d *desk.Desk) {
 				return
 			}
 			d.SetIdaDir(paths[0])
+		})
+	}()
+}
+
+func pickPack(w *mygo.Window, d *desk.Desk, id string) {
+	go func() {
+		paths, err := mygo.Dialog.Open(mygo.OpenDialogOptions{
+			Parent:          w,
+			Title:           "挂载分析包",
+			ButtonLabel:     "挂载",
+			ShowHiddenFiles: true,
+		})
+		w.Update(func() {
+			if err != nil || len(paths) == 0 {
+				return
+			}
+			d.AttachPack(id, paths[0])
 		})
 	}()
 }

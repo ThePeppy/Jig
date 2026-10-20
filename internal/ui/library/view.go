@@ -1,11 +1,14 @@
-// Package library draws the file list. An open worker belongs to its file,
-// not to a separate page. A worker whose path is not in the catalog is still a row.
+// Package library draws the database page: the file list and the detail
+// of the focused file. An open worker belongs to its file, not to a
+// separate page. A worker whose path is not in the catalog is still a row.
+// It does not decide what idalib can load; it shows what the worker said.
 package library
 
 import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -13,31 +16,43 @@ import (
 
 	"jig/internal/catalog"
 	"jig/internal/desk"
+	"jig/internal/pack"
 	"jig/internal/product"
 	"jig/internal/session"
 	"jig/internal/ui/chrome"
 	"jig/internal/ui/theme"
 )
 
-// View renders the library, including any open headless worker.
+// View renders the list column and the detail column.
 func View(c *ui.Context, d *desk.Desk) {
 	rows := libraryRows(d)
 	if len(rows) == 0 {
 		empty(c, d)
 		return
 	}
-	ui.Row(c).Grow(1).Gap(0).AlignItems(ui.Stretch).Children(func() {
-		list(c, d, rows)
-		if focus, ok := focused(d, rows); ok {
-			detail(c, d, focus)
-		}
-	})
+	focus := focused(d, rows)
+	list(c, d, rows, focus)
+	detail(c, d, focus)
 }
 
 type libRow struct {
 	entry  catalog.Entry
 	sess   *session.Session
 	orphan bool
+}
+
+func (r libRow) key() string {
+	if r.orphan && r.sess != nil {
+		return "sess-" + r.sess.ID
+	}
+	return r.entry.ID
+}
+
+func (r libRow) path() string {
+	if r.orphan && r.sess != nil {
+		return firstPath(r.sess.SourcePath, r.sess.DatabasePath)
+	}
+	return r.entry.Path
 }
 
 func libraryRows(d *desk.Desk) []libRow {
@@ -72,461 +87,413 @@ func libraryRows(d *desk.Desk) []libRow {
 	return rows
 }
 
-func focused(d *desk.Desk, rows []libRow) (libRow, bool) {
-	if len(rows) == 0 {
-		return libRow{}, false
-	}
+func focused(d *desk.Desk, rows []libRow) libRow {
 	if d.SelectedSession != "" {
 		for _, r := range rows {
 			if r.orphan && r.sess != nil && r.sess.ID == d.SelectedSession {
-				return r, true
+				return r
 			}
 		}
 	}
 	if e, ok := d.Catalog.Selected(); ok {
 		for _, r := range rows {
 			if !r.orphan && r.entry.ID == e.ID {
-				return r, true
+				return r
 			}
 		}
 	}
-	return rows[0], true
+	return rows[0]
 }
 
-func sameFocus(a, b libRow) bool {
-	if a.orphan || b.orphan {
-		return a.orphan && b.orphan && a.sess != nil && b.sess != nil && a.sess.ID == b.sess.ID
+func matches(r libRow, query string) bool {
+	q := strings.ToLower(strings.TrimSpace(query))
+	if q == "" {
+		return true
 	}
-	return a.entry.ID != "" && a.entry.ID == b.entry.ID
+	return strings.Contains(strings.ToLower(r.entry.Name), q) || strings.Contains(strings.ToLower(r.path()), q)
+}
+
+// state is what a row and its detail say about one file.
+type state struct {
+	tone   chrome.Tone
+	label  string
+	reason string
+}
+
+const (
+	labelReady    = "分析会话运行中"
+	labelStarting = "启动中"
+	labelStopping = "关闭中"
+	labelFailed   = "打开失败"
+	labelMissing  = "文件缺失"
+	labelIdle     = "未打开"
+)
+
+func stateOf(d *desk.Desk, r libRow) state {
+	switch {
+	case !r.orphan && r.entry.Missing():
+		return state{chrome.ToneFault, labelMissing, "磁盘上已找不到这个文件。它可能被移走或删除了。"}
+	case r.sess != nil && r.sess.State == session.StateStopping:
+		return state{chrome.ToneBusy, labelStopping, ""}
+	case r.sess != nil && r.sess.State == session.StateLaunching,
+		r.sess == nil && !r.orphan && d.Launching(r.entry.ID):
+		return state{chrome.ToneBusy, labelStarting, ""}
+	case r.sess != nil && r.sess.State == session.StateError:
+		return state{chrome.ToneFault, labelFailed, r.sess.Error}
+	case r.sess != nil:
+		return state{chrome.ToneLive, labelReady, ""}
+	}
+	if msg, ok := d.Failure(r.entry.ID); ok && !r.orphan {
+		return state{chrome.ToneFault, labelFailed, msg}
+	}
+	return state{chrome.ToneIdle, labelIdle, ""}
 }
 
 func empty(c *ui.Context, d *desk.Desk) {
-	pane := chrome.Pane(c).Grow(1)
-	st := d.Runtime()
-	idaReady := d.IdaDir != "" || st.Found
-
-	pane.Children(func() {
-		ui.Column(c).Grow(1).Center().Padding(32, 32).Transition(chrome.DetailTransition).Children(func() {
-			ui.Column(c).Width(500).AlignItems(ui.Center).Gap(18).Children(func() {
-				chrome.HeroEmblem(c, chrome.IconLibrary, theme.Text)
-
-				ui.Column(c).AlignItems(ui.Center).Gap(8).Children(func() {
-					ui.Text(c, "还没有文件").FontSize(15).FontWeight(500).TextColor(theme.Text)
-					ui.Text(c, "把任意二进制或已有数据库拖进窗口,或从下面添加。文件进入库,不会立刻打开。").
-						FontSize(13).
-						TextColor(theme.TextMuted).
-						TextAlign(ui.Center)
-				})
-
-				ui.Row(c).Padding(2, 0, 6, 0).Children(func() {
-					btn := chrome.PrimaryButton(c, "添加文件", chrome.IconPlus)
-					if btn.Clicked() && d.RequestAdd != nil {
-						d.RequestAdd()
-					}
-				})
-
-				chrome.Plate(c).FillWidth().Padding(14, 18).Children(func() {
-					ui.Row(c).Justify(ui.Center).Gap(12).AlignItems(ui.Center).Children(func() {
-						chrome.Stage(c, "idle", "入库")
-						chrome.Join(c)
-						if idaReady {
-							chrome.Stage(c, "ok", "指定目录")
-						} else {
-							chrome.Stage(c, "idle", "指定目录")
-						}
-						chrome.Join(c)
-						chrome.Stage(c, "idle", "打开")
-					})
-				})
-
-				chrome.Card(c).FillWidth().Padding(12, 16).Children(func() {
-					ui.Row(c).Gap(12).AlignItems(ui.Center).Children(func() {
-						ui.Icon(c, chrome.IconFolder).Size(14, 14).TextColor(theme.TextMuted)
-						ui.Text(c, "IDA 目录").FontSize(12).FontWeight(500).TextColor(theme.Text)
-						ui.Text(c, idaLine(d)).FontSize(12).Font("SF Mono").TextColor(theme.TextMuted).Grow(1).SingleLine()
-						pick := chrome.GhostButton(c, "指定", nil, false)
-						if pick.Clicked() && d.RequestIdaDir != nil {
-							d.RequestIdaDir()
-						}
-					})
-				})
+	chrome.EmptyCard(c, "数据库还是空的", "把文件拖进窗口，或手动选择。任何文件都可以入库。",
+		func() { chrome.Mark(c, 56) },
+		func() {
+			ui.Column(c).AlignItems(ui.Center).Gap(14).Children(func() {
+				if chrome.PrimaryButton(c, "添加文件").Clicked() && d.RequestAdd != nil {
+					d.RequestAdd()
+				}
+				chrome.Notice(c, d)
 			})
 		})
+}
 
-		chrome.Status(c, d, "空", "idle")
+func list(c *ui.Context, d *desk.Desk, rows []libRow, focus libRow) {
+	col := ui.Column(c).Width(theme.ListW).AlignSelf(ui.Stretch).Padding(20, 12).Gap(14).
+		BorderWidth(0, 1, 0, 0).BorderColor(theme.Rule)
+	col.Children(func() {
+		ui.Row(c).Padding(0, 8).AlignItems(ui.Center).Children(func() {
+			chrome.Heading(c, "数据库")
+			ui.Spacer(c)
+			if chrome.PrimaryButton(c, "添加文件").Clicked() && d.RequestAdd != nil {
+				d.RequestAdd()
+			}
+		})
+		search(c, d)
+		if d.Notice != "" {
+			ui.Column(c).Padding(0, 8).Children(func() { chrome.Notice(c, d) })
+		}
+		ui.Scroll(c).Grow(1).MinHeight(0).Gap(2).Children(func() {
+			shown := 0
+			for _, r := range rows {
+				if !matches(r, d.Query) {
+					continue
+				}
+				shown++
+				row(c, d, r, r.key() == focus.key())
+			}
+			if shown == 0 {
+				ui.Text(c, "没有匹配的文件").FontSize(12).TextColor(theme.Muted).Padding(10, 12)
+			}
+		})
+		ui.Row(c).Padding(0, 8).Children(func() {
+			ui.Row(c).Grow(1).Padding(14).Radius(theme.RowR).
+				Border(1, theme.Dash).BorderStyle(ui.BorderDashed).Center().
+				Children(func() {
+					ui.Text(c, "拖入文件，直接入库").FontSize(13).TextColor(theme.Muted)
+				})
+		})
 	})
 }
 
-func list(c *ui.Context, d *desk.Desk, rows []libRow) {
-	pane := chrome.Sidebar(c)
-	openCount := 0
-	for _, r := range rows {
-		if r.sess != nil {
-			openCount++
-		}
-	}
-	focus, _ := focused(d, rows)
-
-	pane.Children(func() {
-		ui.Row(c).Height(32).Padding(0, 12).BorderWidth(0, 0, 1, 0).BorderColor(chrome.Wash(c, "rule")).AlignItems(ui.Center).Children(func() {
-			ui.Text(c, fmt.Sprintf("共 %d 项", len(rows))).FontSize(11).TextColor(theme.TextMuted)
-			ui.Spacer(c)
-			if openCount > 0 {
-				ui.Row(c).Gap(6).AlignItems(ui.Center).Children(func() {
-					ui.Box(c).Size(6, 6).Radius(3).Background(theme.Live)
-					ui.Text(c, fmt.Sprintf("%d 已打开", openCount)).FontSize(11).TextColor(theme.Text)
-				})
-			}
-		})
-
-		ui.Scroll(c).Grow(1).Padding(4, 6).Gap(2).Children(func() {
-			for _, r := range rows {
-				row(c, d, r, sameFocus(r, focus))
-			}
-		})
+func search(c *ui.Context, d *desk.Desk) {
+	ui.Row(c).Padding(0, 8).Children(func() {
+		ui.Row(c).Grow(1).Height(36).Padding(0, 12).Radius(theme.ControlR).Background(theme.FieldVeil).
+			Gap(8).AlignItems(ui.Center).Cursor(ui.CursorText).
+			Children(func() {
+				ui.Icon(c, chrome.IconSearch).Size(14, 14).TextColor(theme.Muted)
+				ui.TextInputBase(c.Key("lib-search"), &d.Query).
+					Placeholder("搜索").
+					Label("搜索数据库").
+					FontSize(13).
+					TextColor(theme.Text).
+					Grow(1)
+			})
 	})
 }
 
 func row(c *ui.Context, d *desk.Desk, r libRow, on bool) {
-	accent := rowAccent(d, r)
-	key := r.entry.ID
-	if r.orphan && r.sess != nil {
-		key = "sess-" + r.sess.ID
-	}
-
+	st := stateOf(d, r)
 	item := ui.Row(c).
-		Key("lib-row-"+key).
-		MinHeight(44).
-		Padding(6, 8).
-		Radius(theme.ControlR).
-		Cursor(ui.CursorPointer).
-		Transition(chrome.ColorTransition).
+		Key("lib-row-"+r.key()).
+		Padding(10, 12).
+		Radius(theme.RowR).
+		Gap(12).
 		AlignItems(ui.Center).
-		Gap(10).
+		Cursor(ui.CursorPointer).
 		Focusable().
 		Label(r.entry.Name)
-
 	if item.Clicked() {
 		selectRow(d, r)
 		on = true
 	}
-
-	chrome.StyleSidebarRow(c, item, on, accent)
-
+	switch {
+	case on:
+		item.Background(theme.RowActive)
+	case item.Hovered():
+		item.Background(theme.RowHover)
+	}
 	item.Children(func() {
-		chrome.CartridgeTile(c, extShort(tilePath(r)), accent, false)
-
-		ui.Column(c).Grow(1).Gap(2).Children(func() {
-			ui.Row(c).AlignItems(ui.Center).Gap(6).Children(func() {
-				nameColor := theme.TextMuted
-				if on {
-					nameColor = theme.Text
-				}
-				ui.Text(c, r.entry.Name).FontSize(13).FontWeight(500).TextColor(nameColor).Grow(1).SingleLine()
-
-				if !r.orphan && r.entry.Missing() {
-					chrome.Stage(c, "bad", "文件缺失")
-				} else if stopping(r) {
-					chrome.LiveStage(c, "关闭中")
-				} else if starting(d, r) {
-					chrome.LiveStage(c, "启动中")
-				} else if r.sess != nil {
-					chrome.Stage(c, stateTone(r.sess.State), stateLabel(r.sess.State))
-				}
-			})
-
-			ui.Row(c).AlignItems(ui.Center).Gap(5).Children(func() {
-				if r.orphan && r.sess != nil {
-					ui.Text(c, r.sess.ID).FontSize(11).Font("SF Mono").TextColor(theme.Muted)
-					ui.Text(c, "·").FontSize(11).TextColor(theme.Muted)
-					ui.Text(c, r.sess.Elapsed()).FontSize(11).Font("SF Mono").TextColor(theme.Muted)
-					return
-				}
-				ui.Text(c, "文件").FontSize(11).TextColor(theme.Muted)
-				ui.Text(c, "·").FontSize(11).TextColor(theme.Muted)
-				ui.Text(c, product.ShortPath(filepath.Dir(r.entry.Source))).FontSize(11).Font("SF Mono").TextColor(theme.Muted).Grow(1).SingleLine()
-			})
+		chrome.ToneDot(c, st.tone, 8)
+		ui.Column(c).Grow(1).MinWidth(0).Gap(2).Children(func() {
+			ui.Text(c, r.entry.Name).FontSize(13).FontWeight(500).TextColor(theme.Text).SingleLine()
+			chrome.Mono(c, product.ShortPath(r.path()), 11.5, theme.Muted)
 		})
 	})
 }
 
 func detail(c *ui.Context, d *desk.Desk, r libRow) {
-	accent := rowAccent(d, r)
-	st := d.Runtime()
-	idaReady := d.IdaDir != "" || st.Found
-	missing := !r.orphan && r.entry.Missing()
-	key := r.entry.ID
-	if r.orphan && r.sess != nil {
-		key = "sess-" + r.sess.ID
-	}
-	headerPath := r.entry.Path
-	if r.orphan && r.sess != nil {
-		headerPath = firstPath(r.sess.SourcePath, r.sess.DatabasePath)
-	}
-
-	pane := chrome.Pane(c).Grow(1)
-	pane.Children(func() {
-		ui.Row(c).
-			Key("lib-head-"+key).
-			Padding(16, 24, 12, 24).
-			BorderWidth(0, 0, 1, 0).
-			BorderColor(chrome.Wash(c, "rule")).
-			Gap(14).
-			AlignItems(ui.Center).
-			Transition(chrome.DetailTransition).
-			Children(func() {
-				chrome.CartridgeTile(c, extShort(tilePath(r)), accent, true)
-
-				ui.Column(c).Grow(1).Gap(5).Children(func() {
-					ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-						ui.Text(c, r.entry.Name).FontSize(15).FontWeight(500).TextColor(theme.Text).SingleLine()
-
-						if missing {
-							chrome.Stage(c, "bad", "文件缺失")
-						} else if stopping(r) {
-							chrome.LiveStage(c, "关闭中")
-						} else if starting(d, r) {
-							chrome.LiveStage(c, "启动中")
-						} else if r.sess != nil {
-							chrome.Stage(c, stateTone(r.sess.State), stateLabel(r.sess.State))
-						} else {
-							chrome.Stage(c, "idle", "未打开")
-						}
-					})
-
-					ui.Text(c, product.ShortPath(headerPath)).FontSize(12).Font("SF Mono").TextColor(theme.TextMuted).SingleLine()
-				})
-
-				ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-					switch {
-					case stopping(r):
-						chrome.BusyGhost(c, "关闭中", true)
-					case r.sess != nil:
-						closeBtn := chrome.GhostButton(c, "关闭会话", nil, true)
-						if closeBtn.Clicked() {
-							_ = d.CloseSession(r.sess.ID)
-						}
-					case starting(d, r):
-						chrome.BusyButton(c, "启动中")
-					case !missing:
-						launch := chrome.PrimaryButton(c, "启动分析", chrome.IconPlay)
-						if launch.Clicked() {
-							_ = d.StartSession(r.entry)
-						}
-					}
-					if !r.orphan {
-						del := chrome.GhostButton(c, "移出", nil, false)
-						if del.Clicked() {
-							d.RemoveSelected()
-						}
-					}
-				})
+	st := stateOf(d, r)
+	ui.Scroll(c).
+		Key("lib-detail-"+r.key()).
+		Grow(1).
+		MinWidth(0).
+		Padding(28, 32).
+		Gap(24).
+		Transition(chrome.PageTransition).
+		Children(func() {
+			ui.Column(c).Children(func() {
+				chrome.Pill(c, st.tone, st.label)
+				ui.Text(c, r.entry.Name).FontSize(30).FontWeight(600).LetterSpacing(-0.6).TextColor(theme.Text).
+					SingleLine().Padding(12, 0, 4, 0)
+				chrome.Mono(c, product.ShortPath(r.path()), 12, theme.Muted)
+				ui.Row(c).Gap(10).Padding(18, 0, 0, 0).Children(func() { actions(c, d, r, st) })
 			})
-
-		ui.Scroll(c).
-			Key("lib-body-"+key).
-			Grow(1).
-			Padding(16, 24).
-			Gap(12).
-			Transition(chrome.DetailTransition).
-			Children(func() {
-				if missing {
-					ui.Row(c).Padding(8, 12).Radius(theme.ControlR).Background(chrome.Wash(c, "fault")).Border(1, theme.Trouble).Gap(8).AlignItems(ui.Center).Children(func() {
-						ui.Icon(c, chrome.IconAlert).Size(14, 14).TextColor(theme.Trouble)
-						ui.Text(c, "文件缺失: 磁盘上已找不到该路径").FontSize(12).TextColor(theme.Trouble)
-					})
-				}
-				workCard(c, d, r)
-
-				if r.sess != nil && r.sess.State != session.StateLaunching {
-					sessionBody(c, r.sess)
-				}
-
-				if !r.orphan {
-					chrome.Card(c).Children(func() {
-						ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
-							chrome.ReadoutCell(c, "类型", "文件", "装载与报错由 idalib 决定", accent)
-							chrome.ReadoutCell(c, "大小", formatFileSize(r.entry.Path), filepath.Base(r.entry.Path), theme.Run)
-
-							ui.Column(c).Grow(1.3).Basis(0).Padding(14, 18).Gap(7).Justify(ui.Center).Children(func() {
-								ui.Row(c).Gap(8).AlignItems(ui.Center).Children(func() {
-									chrome.Stage(c, "done", "入库")
-									chrome.Join(c)
-									if idaReady {
-										chrome.Stage(c, "done", "指定目录")
-									} else {
-										chrome.Stage(c, "idle", "指定目录")
-									}
-									chrome.Join(c)
-									if r.sess != nil {
-										chrome.Stage(c, "live", "打开")
-									} else {
-										chrome.Stage(c, "idle", "打开")
-									}
-								})
-								ui.Text(c, "打开时询问装载器，失败带回 idalib 的错误。").FontSize(11).TextColor(theme.TextMuted).SingleLine()
-							})
-						})
-					})
-				}
-
-				if r.sess == nil || samePath(r.sess.SourcePath, r.sess.DatabasePath) || r.sess.DatabasePath == "" {
-					openBadge := "未打开"
-					openTone := "idle"
-					switch {
-					case stopping(r):
-						openBadge = "关闭中"
-						openTone = "live"
-					case starting(d, r):
-						openBadge = "启动中"
-						openTone = "live"
-					case r.sess != nil:
-						openBadge = "已挂载"
-						openTone = "live"
-					}
-					chrome.PathSlotCard(c, "路径", r.entry.Name, product.ShortPath(r.entry.Path), openBadge, openTone)
-				}
-
-				callLog(c, d, r)
-			})
-
-		statusLabel := "未打开"
-		statusTone := "idle"
-		switch {
-		case stopping(r):
-			statusLabel = "关闭中"
-			statusTone = "live"
-		case starting(d, r):
-			statusLabel = "启动中"
-			statusTone = "live"
-		case r.sess != nil:
-			statusLabel = stateLabel(r.sess.State)
-			statusTone = stateTone(r.sess.State)
-		}
-		chrome.Status(c, d, statusLabel, statusTone)
-	})
-}
-
-func workCard(c *ui.Context, d *desk.Desk, r libRow) {
-	if stopping(r) {
-		chrome.Work(c, "关闭中", "", "正在收拢数据库。完成后回到未打开。", []string{"通知", "收拢", "离开"}, 1)
-		return
-	}
-	if !starting(d, r) {
-		return
-	}
-	step := 0
-	detail := "正在拉起 worker。"
-	if r.sess != nil && r.sess.State == session.StateLaunching {
-		step = 1
-		detail = "正在打开数据库，等待连上。"
-	}
-	meta := ""
-	if t, ok := d.LaunchStarted(r.entry.ID); ok {
-		meta = waitLabel(t)
-	}
-	chrome.Work(c, "启动中", meta, detail, []string{"拉起", "打开", "就绪"}, step)
-}
-
-func starting(d *desk.Desk, r libRow) bool {
-	if stopping(r) {
-		return false
-	}
-	if r.sess != nil && r.sess.State == session.StateLaunching {
-		return true
-	}
-	if r.orphan || r.sess != nil && r.sess.State == session.StateReady {
-		return false
-	}
-	return d.Launching(r.entry.ID)
-}
-
-func stopping(r libRow) bool {
-	return r.sess != nil && r.sess.State == session.StateStopping
-}
-
-func waitLabel(t time.Time) string {
-	d := time.Since(t).Round(time.Second)
-	if d < 0 {
-		d = 0
-	}
-	return fmt.Sprintf("%02d:%02d", int(d.Minutes()), int(d.Seconds())%60)
-}
-
-func sessionBody(c *ui.Context, s *session.Session) {
-	chrome.Card(c).Children(func() {
-		ui.Row(c).Dividers(1, chrome.Wash(c, "rule")).AlignItems(ui.Stretch).Children(func() {
-			chrome.ReadoutCell(c, "会话 ID", s.ID, "本机实例句柄", theme.Run)
-			chrome.ReadoutCell(c, "进程 PID", fmt.Sprintf("%d", s.PID), "分析进程", theme.Live)
-			chrome.ReadoutCell(c, "运行时长", s.Elapsed(), "无界面驻留中", theme.Live)
+			body(c, d, r, st)
 		})
-	})
-
-	src := s.SourcePath
-	db := s.DatabasePath
-	if src == "" {
-		src = db
-	}
-	if db == "" || samePath(src, db) {
-		return
-	}
-	ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
-		chrome.PathSlotCard(c, "样本路径", filepath.Base(src), product.ShortPath(src), "已连接", "done").Grow(1).Basis(0)
-		chrome.ConduitBridge(c, "127.0.0.1:9399", true)
-		chrome.PathSlotCard(c, "数据库", filepath.Base(db), product.ShortPath(db), stateLabel(s.State), stateTone(s.State)).Grow(1).Basis(0)
-	})
 }
 
-func callLog(c *ui.Context, d *desk.Desk, r libRow) {
-	type callRow struct {
-		fn, durStr, sum string
-		dur             time.Duration
-		ok              bool
-	}
-	var fileTraces []callRow
-	for _, tr := range d.Traces.Entries() {
-		if !traceMatches(tr.Target, r) {
-			continue
+func actions(c *ui.Context, d *desk.Desk, r libRow, st state) {
+	switch st.label {
+	case labelReady:
+		if d.Saving(r.sess.ID) {
+			chrome.BusyButton(c, "保存中", chrome.SizeLarge)
+		} else if chrome.Button(c, "保存", chrome.SizeLarge).Clicked() {
+			d.SaveSession(r.sess.ID)
 		}
-		fileTraces = append(fileTraces, callRow{
-			fn:     tr.Function,
-			durStr: tr.FormatDuration(),
-			sum:    tr.Summary,
-			dur:    tr.Duration,
-			ok:     tr.Status != "error",
+		if chrome.Button(c, "关闭会话", chrome.SizeLarge).Clicked() {
+			_ = d.CloseSession(r.sess.ID)
+		}
+		return
+	case labelStarting, labelStopping:
+		return
+	case labelFailed:
+		if !r.orphan && chrome.PrimaryButton(c, "重试").Clicked() {
+			_ = d.StartSession(r.entry)
+		}
+	case labelIdle:
+		if chrome.PrimaryButton(c, "启动分析").Clicked() {
+			_ = d.StartSession(r.entry)
+		}
+	}
+	if !r.orphan && chrome.Button(c, "从数据库移除", chrome.SizeMedium).Clicked() {
+		selectRow(d, r)
+		d.RemoveSelected()
+	}
+}
+
+func body(c *ui.Context, d *desk.Desk, r libRow, st state) {
+	switch st.label {
+	case labelFailed, labelMissing:
+		reason := st.reason
+		if reason == "" {
+			reason = "worker 没有带回原因。"
+		}
+		chrome.FaultCard(c, "原因", reason)
+	case labelReady:
+		ui.Grid(c).Columns(2).Gap(16).Children(func() {
+			infoCard(c, r.sess)
+			agentCard(c, d)
+			packCard(c, d, r.sess)
+			recentCard(c, d, r)
+		})
+	case labelStarting, labelStopping:
+		ui.Grid(c).Columns(2).Gap(16).Children(func() {
+			progressCard(c, d, r, st)
+			agentCard(c, d)
+		})
+	default:
+		ui.Grid(c).Columns(2).Gap(16).Children(func() {
+			fileCard(c, r)
+			recentCard(c, d, r)
 		})
 	}
+}
 
-	ui.Column(c).Gap(8).Children(func() {
-		chrome.Kicker(c, "这次打开以来", len(fileTraces))
-		if len(fileTraces) > 0 {
-			chrome.Card(c).Dividers(1, chrome.Wash(c, "rule")).Children(func() {
-				for _, tr := range fileTraces {
-					ui.Row(c).MinHeight(36).Padding(0, 14).Gap(12).AlignItems(ui.Center).Children(func() {
-						ui.Box(c).Size(6, 6).Radius(3).Background(chrome.CallMark(tr.ok))
-						ui.Text(c, tr.fn).FontSize(12).FontWeight(500).Font(theme.FontMono).TextColor(theme.Text).Width(156).SingleLine()
-						ui.Row(c).Width(96).Gap(8).AlignItems(ui.Center).Children(func() {
-							chrome.LatencyBar(c, tr.dur, tr.ok)
-							ui.Text(c, tr.durStr).FontSize(11).Font("SF Mono").TextColor(theme.TextMuted)
-						})
-						ui.Text(c, tr.sum).FontSize(12).TextColor(theme.TextMuted).Grow(1).SingleLine()
-					})
+func infoCard(c *ui.Context, s *session.Session) {
+	m := s.Metadata
+	proc := strings.ToUpper(metaString(m, "processor"))
+	if bits := metaInt(m, "bitness"); proc != "" && bits > 0 {
+		proc = fmt.Sprintf("%s · %d 位", proc, bits)
+	}
+	auto := "—"
+	switch {
+	case m == nil:
+	case metaBool(m, "autoAnalysisComplete"):
+		auto = "已完成"
+	case metaBool(m, "autoAnalysisRunning"):
+		auto = "进行中"
+	default:
+		auto = "未开始"
+	}
+	chrome.Card(c, "数据库信息", func() {
+		chrome.Facts(c, 80, 10,
+			chrome.Fact{Label: "格式", Value: orDash(metaString(m, "fileType"))},
+			chrome.Fact{Label: "处理器", Value: orDash(proc)},
+			chrome.Fact{Label: "基址", Value: orDash(metaString(m, "imageBase")), Mono: true},
+			chrome.Fact{Label: "自动分析", Value: auto},
+		)
+	})
+}
+
+func agentCard(c *ui.Context, d *desk.Desk) {
+	chrome.Card(c, "代理连接", func() {
+		ui.Row(c).Height(40).Padding(0, 6, 0, 12).Radius(theme.ControlR).Background(theme.Well).
+			Gap(10).AlignItems(ui.Center).Children(func() {
+			chrome.Mono(c, chrome.MCPURL, 12, theme.Text).Grow(1).MinWidth(0)
+			chrome.CopyButton(c, d, "agent-url", "复制", chrome.MCPURL, chrome.SizeInline)
+		})
+		ui.Row(c).Gap(8).Padding(14, 0, 0, 0).AlignItems(ui.Center).Children(func() {
+			if d.Listening {
+				chrome.Dot(c, theme.Live, 8)
+				ui.Text(c, "仅本机可访问").FontSize(13).TextColor(theme.TextSoft)
+			} else {
+				chrome.Dot(c, theme.Idle, 8)
+				ui.Text(c, "尚未监听").FontSize(13).TextColor(theme.TextSoft)
+			}
+		})
+	})
+}
+
+func packCard(c *ui.Context, d *desk.Desk, s *session.Session) {
+	p := d.Sessions.PackOf(s.ID)
+	chrome.Card(c, "分析包", func() {
+		if p == nil {
+			ui.Text(c, "未挂载").FontSize(13).TextColor(theme.TextSoft)
+			ui.Text(c, "项目旁的 pack.json。挂上后，Agent 多出包里的工具。").FontSize(13).TextColor(theme.Muted).Wrap().Padding(10, 0, 0, 0)
+			ui.Row(c).Padding(14, 0, 0, 0).Children(func() {
+				if chrome.Button(c, "挂载", chrome.SizeSmall).Clicked() && d.RequestPack != nil {
+					d.RequestPack(s.ID)
 				}
 			})
 			return
 		}
-		chrome.Plate(c).MinHeight(72).Center().Padding(16, 20).Children(func() {
-			ui.Column(c).AlignItems(ui.Center).Gap(6).Children(func() {
-				if r.sess != nil {
-					ui.Text(c, "等待外部 Agent 调用").FontSize(13).FontWeight(500).TextColor(theme.Text)
-					ui.Text(c, "MCP 请求送达后将在此显示耗时与摘要。").FontSize(12).TextColor(theme.TextMuted)
-					return
-				}
-				ui.Text(c, "尚无针对该文件的调用记录").FontSize(13).FontWeight(500).TextColor(theme.Text)
-				ui.Text(c, "点击右上角「启动分析」拉起 idalib 后，外部 Agent 的工具调用将在此实时呈现。").FontSize(12).TextColor(theme.TextMuted)
-			})
+		ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+			chrome.Mono(c, filepath.Base(p.Path), 12, theme.Text).Grow(1).MinWidth(0)
+			ui.Text(c, "已挂载").FontSize(13).TextColor(theme.TextSoft)
+		})
+		ui.Text(c, packKinds(p.Tools)).FontSize(13).TextColor(theme.TextSoft).SingleLine().Padding(10, 0, 0, 0)
+		ui.Row(c).Padding(14, 0, 0, 0).Children(func() {
+			if chrome.Button(c, "卸下", chrome.SizeSmall).Clicked() {
+				d.DetachPack(s.ID)
+			}
 		})
 	})
+}
+
+func packKinds(tools []pack.Tool) string {
+	kinds := make([]string, 0, len(tools))
+	for _, t := range tools {
+		if !slices.Contains(kinds, t.Kind) {
+			kinds = append(kinds, t.Kind)
+		}
+	}
+	if len(kinds) == 0 {
+		return "没有工具"
+	}
+	return strings.Join(kinds, " · ")
+}
+
+func recentCard(c *ui.Context, d *desk.Desk, r libRow) {
+	type call struct {
+		fn string
+		at time.Time
+	}
+	var calls []call
+	for _, tr := range d.Traces.Entries() {
+		if traceMatches(tr.Target, r) {
+			calls = append(calls, call{tr.Function, tr.Timestamp})
+			if len(calls) == 3 {
+				break
+			}
+		}
+	}
+	now := d.Now()
+	chrome.Card(c, "最近记录", func() {
+		if len(calls) == 0 {
+			ui.Text(c, "还没有调用").FontSize(13).TextColor(theme.Muted)
+			return
+		}
+		ui.Column(c).Gap(10).Children(func() {
+			for _, cl := range calls {
+				ui.Row(c).AlignItems(ui.Center).Gap(8).Children(func() {
+					chrome.Mono(c, cl.fn, 12, theme.Text).Grow(1).MinWidth(0)
+					ui.Text(c, chrome.Ago(now, cl.at)).FontSize(12).Font(theme.FontMono).TextColor(theme.Muted)
+				})
+			}
+		})
+	})
+}
+
+func progressCard(c *ui.Context, d *desk.Desk, r libRow, st state) {
+	line := "正在收拢数据库。完成后回到未打开。"
+	var since time.Time
+	if st.label == labelStarting {
+		line = "正在拉起 worker。"
+		if r.sess != nil {
+			line = "正在打开数据库，等待连上。"
+			since = r.sess.StartedAt
+		} else if t, ok := d.LaunchStarted(r.entry.ID); ok {
+			since = t
+		}
+	}
+	chrome.Card(c, "进度", func() {
+		ui.Row(c).Gap(10).AlignItems(ui.Center).Children(func() {
+			chrome.BusyDot(c, 8)
+			ui.Text(c, line).FontSize(13).TextColor(theme.Text).Wrap().Grow(1)
+		})
+		if !since.IsZero() {
+			ui.Text(c, "已等待 "+waitLabel(d.Now().Sub(since))).FontSize(12).Font(theme.FontMono).TextColor(theme.Muted).Padding(10, 0, 0, 0)
+		}
+	})
+}
+
+func fileCard(c *ui.Context, r libRow) {
+	size, modified := "—", "—"
+	if info, err := os.Stat(r.entry.Path); err == nil {
+		size = formatSize(info.Size())
+		modified = info.ModTime().Format("2006-01-02 15:04")
+	}
+	chrome.Card(c, "文件信息", func() {
+		chrome.Facts(c, 80, 10,
+			chrome.Fact{Label: "大小", Value: size},
+			chrome.Fact{Label: "修改时间", Value: modified},
+			chrome.Fact{Label: "目录", Value: product.ShortPath(filepath.Dir(r.entry.Path)), Mono: true},
+		)
+	})
+}
+
+func waitLabel(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	d = d.Round(time.Second)
+	return fmt.Sprintf("%02d:%02d", int(d.Minutes()), int(d.Seconds())%60)
+}
+
+func formatSize(sz int64) string {
+	switch {
+	case sz >= 1<<20:
+		return fmt.Sprintf("%.2f MB", float64(sz)/(1<<20))
+	case sz >= 1<<10:
+		return fmt.Sprintf("%.1f KB", float64(sz)/(1<<10))
+	default:
+		return fmt.Sprintf("%d B", sz)
+	}
 }
 
 func traceMatches(target string, r libRow) bool {
@@ -579,95 +546,29 @@ func firstPath(paths ...string) string {
 	return ""
 }
 
-func tilePath(r libRow) string {
-	if r.orphan && r.sess != nil {
-		return firstPath(r.sess.DatabasePath, r.sess.SourcePath)
+func orDash(s string) string {
+	if s == "" {
+		return "—"
 	}
-	return r.entry.Path
+	return s
 }
 
-func rowAccent(d *desk.Desk, r libRow) ui.Color {
-	if starting(d, r) || stopping(r) {
-		return theme.Live
-	}
-	if r.sess != nil && r.sess.State == session.StateError {
-		return theme.Trouble
-	}
-	if !r.orphan && r.entry.Missing() {
-		return theme.Trouble
-	}
-	if r.sess != nil {
-		return theme.Live
-	}
-	return theme.Muted
+func metaString(m map[string]any, key string) string {
+	s, _ := m[key].(string)
+	return s
 }
 
-func stateLabel(s session.State) string {
-	switch s {
-	case session.StateLaunching:
-		return "启动中"
-	case session.StateReady:
-		return "就绪"
-	case session.StateStopping:
-		return "关闭中"
-	case session.StateClosed:
-		return "已关闭"
-	case session.StateError:
-		return "失败"
-	default:
-		return string(s)
-	}
+func metaBool(m map[string]any, key string) bool {
+	b, _ := m[key].(bool)
+	return b
 }
 
-func stateTone(s session.State) string {
-	switch s {
-	case session.StateError:
-		return "bad"
-	case session.StateClosed:
-		return "idle"
-	default:
-		return "live"
+func metaInt(m map[string]any, key string) int {
+	switch v := m[key].(type) {
+	case float64:
+		return int(v)
+	case int:
+		return v
 	}
-}
-
-func extShort(path string) string {
-	ext := strings.ToUpper(strings.TrimPrefix(filepath.Ext(path), "."))
-	if ext == "" {
-		return "BIN"
-	}
-	if len(ext) > 4 {
-		return ext[:4]
-	}
-	return ext
-}
-
-func formatFileSize(path string) string {
-	ext := strings.ToUpper(strings.TrimPrefix(filepath.Ext(path), "."))
-	if ext == "" {
-		ext = "BIN"
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return ext + " 文件"
-	}
-	sz := info.Size()
-	switch {
-	case sz >= 1024*1024:
-		return fmt.Sprintf("%.2f MB · %s 文件", float64(sz)/(1024*1024), ext)
-	case sz >= 1024:
-		return fmt.Sprintf("%.1f KB · %s 文件", float64(sz)/1024, ext)
-	default:
-		return fmt.Sprintf("%d B · %s 文件", sz, ext)
-	}
-}
-
-func idaLine(d *desk.Desk) string {
-	if d.IdaDir != "" {
-		return product.ShortPath(d.IdaDir)
-	}
-	st := d.Runtime()
-	if st.Found {
-		return "探测到 " + product.ShortPath(st.Install)
-	}
-	return "未设置"
+	return 0
 }

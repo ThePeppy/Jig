@@ -85,4 +85,15 @@ var (
 		<circle cx="10" cy="14.5" r="2.2" stroke="#FFFFFF" stroke-width="1.6"/>
 		<path d="M7.8 7.3L9.1 12.5M12.2 7.3L10.9 12.5M8.2 6H11.8" stroke="#FFFFFF" stroke-width="1.5" stroke-linecap="round"/>
 	</svg>`))
+
+	// IconSearch leads the library filter.
+	IconSearch = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2" stroke-linecap="round" xmlns="http://www.w3.org/2000/svg">
+		<circle cx="11" cy="11" r="7"/>
+		<path d="m20 20-4-4"/>
+	</svg>`))
+
+	// IconClose ends one session in the menu-bar panel.
+	IconClose = ui.MustParseSVG([]byte(`<svg viewBox="0 0 24 24" fill="none" stroke="#FFFFFF" stroke-width="2.4" stroke-linecap="round" xmlns="http://www.w3.org/2000/svg">
+		<path d="M5 5l14 14M19 5 5 19"/>
+	</svg>`))
 )
